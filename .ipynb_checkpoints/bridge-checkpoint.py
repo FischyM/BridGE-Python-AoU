@@ -91,6 +91,7 @@ if __name__ == '__main__':
 	if job == 'DataProcess':
 		print('data processing...')
 		sys.stdout.flush()
+		## data processing step
 
 		## convert plinkfile to pickle
 		if plinkfile == '':
@@ -102,7 +103,6 @@ if __name__ == '__main__':
 			sys.exit('plinkFiles do not exist')
 		finalfile = project_dir + '/intermediate/' + plinkfile + '.pkl'
 		p2p.plink2pkl(rawfile, bimfile, famfile, finalfile)
-        
 		## converting snp data assuming different disease models
 		ba.bindataa(project_dir,finalfile,'r')
 		ba.bindataa(project_dir,finalfile,'d')
@@ -110,7 +110,6 @@ if __name__ == '__main__':
 		entrezFile = project_dir + '/raw/'+ genesets + '.entrez.gmt'
 		if not path.exists(symbolsFile) or not path.exists(entrezFile):
 			sys.exit('genesets do not exist')
-            
 		## prepare gene set information
 		msig2p.msigdb2pkl(symbolsFile, entrezFile)
 		gene_annotation	= project_dir +	'/raw/' + gene_annotation
@@ -122,16 +121,12 @@ if __name__ == '__main__':
 		dir_sgm = bimfile.split('/')
 		dir_sgm[-1] = sgmFile
 		sgmfile = s.join(dir_sgm)
-        
 		## build relationship between snps and genes
 		snp2gene.mapsnp2gene(bimfile, gene_annotation, mappingDistance, 'matrix', sgmfile) # matrix mode - #change
-        
 		## extract snp-pathway information
 		geneset_pkl = project_dir + '/intermediate/' + genesets + '.pkl'
 		outfile = snpp.snppathway(finalfile, sgmfile, geneset_pkl, minPath, maxPath)
 		bpm.bpmind(outfile)
-
-        
 	elif job == 'ComputeInteraction':
 		## Validating input parameters
 		if not (model == 'RR' or model == 'RD' or model == 'DD' or model == 'combined'):
