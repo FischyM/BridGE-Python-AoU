@@ -111,7 +111,7 @@ if __name__ == '__main__':
         if not path.exists(symbolsfile) or not path.exists(entrezfile):
             sys.exit(f'genesets do not exist: {symbolsfile}, {entrezfile}')
         msig2p.msigdb2pkl(symbolsfile, entrezfile)
-        # TODO: add in functionality to reduce gene set based on Jaccard similarity
+        # TODO: add in functionality to reduce gene set based on Jaccard similarity?
         
         # build relationship between snps and genes
         gene_annotation_file = f"{project_dir}/raw/{gene_annotation}"
@@ -119,7 +119,6 @@ if __name__ == '__main__':
             sys.exit('gene annotation file not found')
         sgmfile = f"{project_dir}/intermediate/snpgenemapping_{int(mappingDistance/1000)}kb.pkl"
         snp2gene.mapsnp2gene(bimfile, gene_annotation_file, mappingDistance, 'matrix', sgmfile)
-        # TODO: I need to replace this with my implementation of mapsnp2gene which is much faster
 
         # extract snp-pathway information
         geneset_pkl = f"{project_dir}/intermediate/{genesets}.pkl"

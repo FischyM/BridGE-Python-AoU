@@ -1,5 +1,7 @@
-import pandas as pd
 import pickle
+
+import pandas as pd
+
 from datatools import imputesnp as isnp
 from classes import SNPdataclass as snpc
 
@@ -71,5 +73,5 @@ def plink2pkl(rawFile, pvarFile, psamFile, outputFile):
 
     # Save data to pickle file.
     final = open(outputFile, 'wb')
-    pickle.dump(SNPdata, final)
+    pickle.dump(SNPdata, final, protocol=pickle.HIGHEST_PROTOCOL)
     final.close()

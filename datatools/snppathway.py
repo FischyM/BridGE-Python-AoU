@@ -1,7 +1,10 @@
 import pickle
+
 import numpy as np
-from classes import snpsetclass as snps
 import pandas as pd
+from scipy.sparse import csr_array
+
+from classes import snpsetclass as snps
 
 
 def snppathway(dataFile, sgmFile, genesets, minPath, maxPath):
@@ -20,7 +23,7 @@ def snppathway(dataFile, sgmFile, genesets, minPath, maxPath):
     Returns:
         str: Path to the output pickle file containing the snp-to-pathway mapping.
     """
-
+    
     # find project directory
     p_dir = dataFile.split('/')
     s = '/'
@@ -30,59 +33,71 @@ def snppathway(dataFile, sgmFile, genesets, minPath, maxPath):
     pklin = open(dataFile, "rb")
     SNPdata = pickle.load(pklin)
     pklin.close()
-    
+
     pklin = open(sgmFile, "rb")
-    sgm = pickle.load(pklin)
+    sgm = pickle.load(pklin)  # snps are rows, genes are columns
     pklin.close()
-    
+
     pklin = open(genesets, "rb")
     geneset = pickle.load(pklin)
     pklin.close()
-    
-    # Dropping the set difference of the genes in the gpmatrix and sgmatrix.
-    genedroplist = list(set(geneset.gpmatrix.index).difference(set(sgm.columns)))
-    sgpm = geneset.gpmatrix.drop(genedroplist, axis=0)
-    orig_order = list(sgpm.columns)
-    sgpm = sgpm.replace(to_replace=(2), value=1)
-    sgpm = sgpm.sort_index(axis=1)
 
-    # sort sgm rsids based on the SNPdata
-    rsg = sgm.index.values
-    rss = SNPdata.rsid
-    tmp_sgm = np.zeros((rss.shape[0], sgm.shape[1]))
-    for i in range(rss.shape[0]):
-        rs = rss[i]
-        tmp = np.where(rsg==rs)
-        if tmp[0].shape[0] > 0:
-            tmp_sgm[i, :] = sgm.iloc[tmp[0][0], :]
-    sgm = pd.DataFrame(tmp_sgm, index=rss, columns=sgm.columns)
+    # find the snps in SNPdata (plink data) that are also in the snp-gene matrix
+    # since the snp-gene matrix was created from the plink data, this is simply a sanity check that runs fast
+    tmp_ids = np.intersect1d(SNPdata.rsid, sgm.index)  # TODO: 6/25/26 MF - I need to change this to var_id in SNPClass.py
+    ind_ids = sgm.index.isin(tmp_ids)
+    tmp_sgm = sgm.loc[ind_ids, :]
 
-    # Only keeping the columns in both the snp-gene pathway
-    testm = sgm[sgpm.index]
-    
-    # Matrix multiply dataframes to associate rsids with pathways through genes.
-    final = testm.dot(sgpm)
-    final = final.reindex(columns=orig_order)
+    # keep only pathways with total genes less than upper limit and more than lower limit
+    ind = (np.sum(geneset.gpmatrix, axis=0) <= maxPath) & (np.sum(geneset.gpmatrix, axis=0) >= minPath)
+    tmp_gpm = geneset.gpmatrix.loc[:, ind]
 
-    # Summing columns of pathway to known snps and filtering those not in range.
-    fnlsum = final.astype(bool).sum()
-    validpwysfnl = fnlsum[fnlsum.apply(lambda x: filter_val(minPath, maxPath, x))]
-    spm = final[validpwysfnl.index]
-    spm = spm.replace(to_replace='^[1-9][0-9]*$', value=1,regex=True)
-    pathways = spm.astype(bool).sum()
+    # keep genes that are in both snp-gene and gene-pathway matrices
+    keep_genes = np.intersect1d(tmp_gpm.index, tmp_sgm.columns)
+    tmp2_sgm = tmp_sgm.loc[:, keep_genes]
+    tmp2_gpm = tmp_gpm.loc[keep_genes, :]
+
+    # make snp-pathway matrix with dot product of sparse arrays (near instant computation)
+    sg_sparse = csr_array(tmp2_sgm.to_numpy())
+    gp_sparse = csr_array(tmp2_gpm.to_numpy())
+    tmp_sgp = sg_sparse.dot(gp_sparse).toarray()
+
+    # after matrix multiplication (dot product) there will be values greater than 1
+    # set data type to bool and then back to int
+    tmp_sgp = tmp_sgp.astype(bool).astype(int)
+    tmp_sgp_df = pd.DataFrame(tmp_sgp,
+                                index=pd.Series(tmp2_sgm.index, name='var_id'),
+                                columns=pd.Series(tmp2_gpm.columns, name='pathway'))
+
+    # remove pathways with total SNPs more than upper limit and less than lower limit
+    ind = (np.sum(tmp_sgp_df, axis=0) <= maxPath) & (np.sum(tmp_sgp_df, axis=0) >= minPath)
+    tmp_sgp_df = tmp_sgp_df.loc[:, ind]
+
+    # remove snps (rows) that aren't in a pathway
+    ind_rows = (np.sum(tmp_sgp_df, axis=1) == 0)
+    remove_rows = tmp_sgp_df.index[ind_rows]
+    tmp_sgp_df = tmp_sgp_df.drop(remove_rows, axis=0)
+
+    # remove pathways (columns) that aren't in any snps
+    ind_cols = (np.sum(tmp_sgp_df, axis=0) == 0)
+    remove_cols = tmp_sgp_df.columns[ind_cols]
+    tmp_sgp_df = tmp_sgp_df.drop(remove_cols, axis=1)
+
+    # check again the SNP limit (mostly just for lower bound, but we'll keep in upper bound too)
+    ind = (np.sum(tmp_sgp_df, axis=0) <= maxPath) & (np.sum(tmp_sgp_df, axis=0) >= minPath)
+    tmp_sgp_df = tmp_sgp_df.loc[:, ind]
 
     # Preparing data and filename for pickle storage.
-    snpset = snps.snpsetclass(pathways, spm, genesets)
+    pathways = tmp_sgp_df.sum(axis=0)
+    snpset = snps.snpsetclass(pathways, tmp_sgp_df, genesets)
     outfilename = f"{project_dir}/snp_pathway_min{minPath}_max{maxPath}.pkl"
 
     # Saving data to pickle file.
     final = open(outfilename, 'wb')
-    pickle.dump(snpset, final)
+    pickle.dump(snpset, final, protocol=pickle.HIGHEST_PROTOCOL)
     final.close()
 
     # Returning the name of the output file to be used by other modules.
     return outfilename
-
-# Filter to keep pathways with number of snps between lower and upper range.
-def filter_val(lower, upper, length):
-    return ((lower <= length) and (length <= upper))
+    # 6/25/26 MF - confirmed this snp by pathway matrix is correct BUT DOES NOT MATCH THE ORIGINAL IMPLEMENTATION
+    # see AoU-run_bridge.md for details.

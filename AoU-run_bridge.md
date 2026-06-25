@@ -6,6 +6,18 @@ BridGE analysis works best from the command line, so this file will serve as the
 
 For more information or for troubleshooting, see the BridGE Nature Protocol paper here <https://www.nature.com/articles/s41596-024-00954-8>
 
+## READ FIRST
+
+This BridGE implementation is NOT a one-to-one reinvention of BridGE (<https://github.com/csbio/BridGE-Python>). Changes are listed below
+
+- snp-to-pathway matrix is not equivalent. There may have been a bug where snp-to-gene mapping file was correctly made, however, in snppathway() the snp-to-gene matrix that gets created (sgm) uses the plink rsIDs, not the SNP to gene mapping.
+  - This creates a snp-to-pathway matrix of all the SNPs, even if they are not within a gene boundary.
+  - Which means that we could be testing SNPs not within a gene boundary and also making some pathways have more connected SNPs than should be possible.
+  - I have opted for my implementation, which is simple, fast, and verified to contain only relevant SNPs and pathways.
+- bpmind.py
+  - bug in determining number of interactions per WPM. It was being calculated as `(pathways.values * pathways.values) - pathways.values`, however, since this is a WPM it should be of the form `n(n-1) / 2`
+  - Therefore, the wpm sizes for this implementation will differ from the BridGE-Python implementation
+
 ## Setting up BridGE
 
 Create the conda environment used in BridGE.
