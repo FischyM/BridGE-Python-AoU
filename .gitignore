@@ -1,1 +1,10 @@
-**py.c
+*.pyc
+
+TODO.md
+Testing.ipynb
+
+data/
+
+intel*
+plink2
+vcf_subset

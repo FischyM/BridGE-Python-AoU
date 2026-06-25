@@ -6,21 +6,24 @@ import math
 import sys
 import datetime
 
-# MSIGDB2PKL convert MsigDB gene set file (.gmt) to pickle file (Python pkl).
-#
-# INPUTS:
-#   symbolsFile: MsigDB gene set file using gene symbols (.symbols.gmt).
-#   entrezFile: MsigDB gene set file using gene entrez ids (.entrez.gmt).
-#
-# OUTPUTS:
-#   <symbolsFile>.pkl -This pickle file uses a geneset class with fields:
-#       geneset.entrezids - gene {symbol: entrezID} lookup dictionary
-#       geneset.gpmatrix - gene pathway binary dataframe
 
 def msigdb2pkl(symbolsFile, entrezFile):
+    """Convert MsigDB gene set file (.gmt) to pickle file (Python pkl).
+        
+    Args:
+        symbolsFile: MsigDB gene set file using gene symbols (.symbols.gmt).
+        entrezFile: MsigDB gene set file using gene entrez ids (.entrez.gmt).
+        
+    OUTPUTS:
+        <symbolsFile>.pkl - This pickle file uses a geneset class with fields:
+            geneset.entrezids - gene {symbol: entrezID} lookup dictionary
+            geneset.gpmatrix - gene pathway binary dataframe
+    """
+    
+    
     # Reading files into dataframes.
     # first determine the maximum number of columns in csv file
-    sdf = pd.read_csv(symbolsFile,header=None, engine='python')
+    sdf = pd.read_csv(symbolsFile, header=None, engine='python')
     m = 0
     for i in range(sdf.shape[0]):
         tmp = sdf.iloc[i][0]
@@ -30,8 +33,8 @@ def msigdb2pkl(symbolsFile, entrezFile):
     r = range(m)
     #names = map(str,r)
     #names = list(names)
-    sdf = pd.read_csv(symbolsFile, sep='\s+', header=None, names= r,engine='python')
-    edf = pd.read_csv(entrezFile, sep='\s+', header=None, names= r,engine='python')
+    sdf = pd.read_csv(symbolsFile, sep=r"\s+", header=None, names=r, engine='python')
+    edf = pd.read_csv(entrezFile, sep=r"\s+", header=None, names=r, engine='python')
 
     # Accumulator list, symbol list, and entrezID list
     acclist, symlist, idlist = [], [], []
@@ -46,7 +49,7 @@ def msigdb2pkl(symbolsFile, entrezFile):
     symboldict = dict(zip(symlist, pd.to_numeric(idlist)))
 
     # Removing extraneous values from each list.
-    symboldict = filter(lambda k:   not math.isnan(k[1]), symboldict.items())
+    symboldict = filter(lambda k: not math.isnan(k[1]), symboldict.items())
     acclist = filter(lambda k: k[1] != None, acclist)
     symlist = filter(lambda k: k != None, symlist)
     idlist = filter(lambda k: not math.isnan(k), idlist)
@@ -56,7 +59,6 @@ def msigdb2pkl(symbolsFile, entrezFile):
     symlist = np.array(list(set(symlist)))
     pwlist = np.array(list(sdf[0]))
     symboldict = dict(set(symboldict))
-
 
     # Building gene pathway matrix (gpm) of appropriate size, and adding labels.
     gpm = pd.DataFrame(np.zeros((len(symlist), sdf.shape[0])),
