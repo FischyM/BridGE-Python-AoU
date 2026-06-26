@@ -55,6 +55,5 @@ def msigdb2pkl(symbolsFile, entrezFile):
     geneset = gsc.genesetclass(symboldict, gpm)
     symbols_pkl_file = symbolsFile.replace(".symbols.gmt", ".pkl")
     symbols_pkl_file = symbols_pkl_file.replace("raw/", "intermediate/")
-    final = open(symbols_pkl_file, 'wb')
-    pickle.dump(geneset, final, protocol=pickle.HIGHEST_PROTOCOL)
-    final.close()
+    with open(symbols_pkl_file, 'wb') as file:
+        pickle.dump(geneset, file, protocol=pickle.HIGHEST_PROTOCOL)

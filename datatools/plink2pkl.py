@@ -72,6 +72,5 @@ def plink2pkl(rawFile, pvarFile, psamFile, outputFile):
         )
 
     # Save data to pickle file.
-    final = open(outputFile, 'wb')
-    pickle.dump(SNPdata, final, protocol=pickle.HIGHEST_PROTOCOL)
-    final.close()
+    with open(outputFile, 'wb') as file:
+        pickle.dump(SNPdata, file, protocol=pickle.HIGHEST_PROTOCOL)

@@ -23,9 +23,8 @@ def bindataa(project_dir, dataFile, expr):
     """
     
     # Reading in pickle datafile
-    pklin = open(dataFile, "rb")
-    SNPdata = pickle.load(pklin)
-    pklin.close()
+    with open(dataFile, "rb") as file:
+        SNPdata = pickle.load(file)
 
     # Checking expression flag to proceed as dominant or recessive (D or R).
     if expr == 'r' or expr == 'R':
@@ -50,6 +49,5 @@ def bindataa(project_dir, dataFile, expr):
     # Will need to make sure that there aren't other changes to the SNPdata class other than the data
     
     # Saving updated SNPdata in output pickle file.
-    final = open(filename, 'wb')
-    pickle.dump(SNPdata, final, protocol=pickle.HIGHEST_PROTOCOL)
-    final.close()
+    with open(filename, 'wb') as file:
+        pickle.dump(SNPdata, file, protocol=pickle.HIGHEST_PROTOCOL)

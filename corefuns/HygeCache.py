@@ -10,7 +10,7 @@ from corefuns import hygetest as ht
 #	- case_flag: flag indicating which of the case_size or control_size is used.
 
 class HygeCache:
-	def __init__(self,sample_size,case_size,control_size):
+	def __init__(self, sample_size, case_size, control_size):
 		self.sample_size = sample_size
 		self.case_size = case_size
 		self.control_size = control_size

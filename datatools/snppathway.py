@@ -26,21 +26,15 @@ def snppathway(dataFile, sgmFile, genesets, minPath, maxPath):
     
     # find project directory
     p_dir = dataFile.split('/')
-    s = '/'
-    project_dir = s.join(p_dir[0:-1])
+    project_dir = "/".join(p_dir[0:-1])
 
     # Loading pickle files into objects
-    pklin = open(dataFile, "rb")
-    SNPdata = pickle.load(pklin)
-    pklin.close()
-
-    pklin = open(sgmFile, "rb")
-    sgm = pickle.load(pklin)  # snps are rows, genes are columns
-    pklin.close()
-
-    pklin = open(genesets, "rb")
-    geneset = pickle.load(pklin)
-    pklin.close()
+    with open(dataFile, "rb") as file:
+        SNPdata = pickle.load(file)
+    with open(sgmFile, "rb") as file:
+        sgm = pickle.load(file)  # snps are rows, genes are columns
+    with open(genesets, "rb") as file:
+        geneset = pickle.load(file)
 
     # find the snps in SNPdata (plink data) that are also in the snp-gene matrix
     # since the snp-gene matrix was created from the plink data, this is simply a sanity check that runs fast
@@ -93,9 +87,8 @@ def snppathway(dataFile, sgmFile, genesets, minPath, maxPath):
     outfilename = f"{project_dir}/snp_pathway_min{minPath}_max{maxPath}.pkl"
 
     # Saving data to pickle file.
-    final = open(outfilename, 'wb')
-    pickle.dump(snpset, final, protocol=pickle.HIGHEST_PROTOCOL)
-    final.close()
+    with open(outfilename, 'wb') as file:
+        pickle.dump(snpset, file, protocol=pickle.HIGHEST_PROTOCOL)
 
     # Returning the name of the output file to be used by other modules.
     return outfilename

@@ -120,9 +120,10 @@ def parallel_run(job_arg):
     sy = job_arg.sy
     i1 = job_arg.i1
     i2 = job_arg.i2
+    s = sy.shape[1]
     symmetric_flag = job_arg.symmetric
     pheno_res = numpy.ones(pheno.shape) - pheno
-    s = sy.shape[1]
+    
     shared_risk = numpy.ctypeslib.as_array(shared_risk_c)
     shared_protective = numpy.ctypeslib.as_array(shared_protective_c)
     print('in the parallel run:')
@@ -131,8 +132,8 @@ def parallel_run(job_arg):
     sys.stdout.flush()	
 
     ## reshaping pheno
-    pheno = numpy.reshape(pheno.values,(pheno.shape[0],1))
-    pheno_res = numpy.reshape(pheno_res.values,(pheno_res.shape[0],1))
+    pheno = numpy.reshape(pheno.values, (pheno.shape[0], 1))
+    pheno_res = numpy.reshape(pheno_res.values, (pheno_res.shape[0], 1))
 
     # pairwise
     ### P11
@@ -342,7 +343,7 @@ def run(project_dir,model,alpha1,alpha2,n_workers,R):
             if i == n_workers -1 :
                 idx.append(s)
             else:
-                idx.append(math.floor(math.sqrt(idx[i]*idx[i]+ share)))
+                idx.append(math.floor(math.sqrt(idx[i] * idx[i] + share)))
     else:
         share = math.floor(s / n_workers)
         for i in range(n_workers):
@@ -367,7 +368,7 @@ def run(project_dir,model,alpha1,alpha2,n_workers,R):
             job_arg.symmetric = False
         job_arg.i1 = idx[i]
         job_arg.i2 = idx[i+1]
-        job_arg.sx = sx.values[:,job_arg.i1:job_arg.i2]
+        job_arg.sx = sx.values[:, job_arg.i1:job_arg.i2]
         job_arg.sy = sy.values
         job_arg.pheno = pheno
         job_args.append(job_arg)
