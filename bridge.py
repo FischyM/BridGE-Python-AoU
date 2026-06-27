@@ -159,11 +159,11 @@ if __name__ == '__main__':
             
         snpDataAD = f"{project_dir}/intermediate/SNPdataAD.pkl"
         if not path.exists(snpDataAD):
-            sys.exit(snpDataAD + ' not found')
+            sys.exit(f"{snpDataAD} not found")
             
         snpDataAR = f"{project_dir}/intermediate/SNPdataAR.pkl"
         if not path.exists(snpDataAR):
-            sys.exit(snpDataAR + ' not found')
+            sys.exit(f"{snpDataAR} not found")
             
         if ssmfile == None:
             if r < 0:
@@ -174,7 +174,7 @@ if __name__ == '__main__':
                 gs.genstats(ssmfile, bpmfile, binaryNetwork, snpPerms, minPath, n_workers, densitycutoff)
                 
             else:
-                for i in range(r+1):
+                for i in range(r + 1):
                     if model == 'combined':
                         ssmfile = f"{project_dir}/intermediate/ssM_mhygessi_combined_R{str(i)}.pkl"
                     else:

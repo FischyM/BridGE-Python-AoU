@@ -17,6 +17,8 @@ import functools
 
 @functools.lru_cache(maxsize=100000)
 def hygetest(n,d,k,m):
-    pv = 1 - hypergeom.cdf(k-1,n,m,d)
-    #logpv = -np.log10(pv)
+    # pv = 1 - hypergeom.cdf(k-1, n, m, d)
+    pv = hypergeom.sf(k-1, n, m, d)  
+    # view decision to use pv = sf() instead of pv = 1 - cdf() at the link below:
+    # https://claude.ai/share/70675da4-b60d-4d7a-8069-5f0fb83b106a
     return pv
