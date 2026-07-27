@@ -1,59 +1,87 @@
-import pickle
-
-import numpy as np
 import pandas as pd
-
+import pickle
 from classes import genesetdataclass as gsc
+import numpy as np
+import math
+import sys
+import datetime
 
+# MSIGDB2PKL convert MsigDB gene set file (.gmt) to pickle file (Python pkl).
+#
+# INPUTS:
+#   symbolsFile: MsigDB gene set file using gene symbols (.symbols.gmt).
+#   entrezFile: MsigDB gene set file using gene entrez ids (.entrez.gmt).
+#
+# OUTPUTS:
+#   <symbolsFile>.pkl -This pickle file uses a geneset class with fields:
+#       geneset.entrezids - gene {symbol: entrezID} lookup dictionary
+#       geneset.gpmatrix - gene pathway binary dataframe
 
 def msigdb2pkl(symbolsFile, entrezFile):
-    """Convert MsigDB gene set file (.gmt) to pickle file (Python pkl).
-        
-    Args:
-        symbolsFile: MsigDB gene set file using gene symbols (.symbols.gmt).
-        entrezFile: MsigDB gene set file using gene entrez ids (.entrez.gmt).
-        
-    OUTPUTS:
-        <symbolsFile>.pkl - This pickle file uses a geneset class with fields:
-            geneset.entrezids - gene {symbol: entrezID} lookup dictionary
-            geneset.gpmatrix - gene pathway binary dataframe
-    """
-    
-    # load pathway files
-    symbols_df = pd.read_csv(symbolsFile, header=None)
-    symbols_df = symbols_df[0].str.split('\t', expand=True, n=2)
-    symbols_df.columns = ['pathway_names', "url", "gene_names"]
-    symbols_df['gene_names'] = symbols_df['gene_names'].str.split('\t')
+    # Reading files into dataframes.
+    # first determine the maximum number of columns in csv file
+    sdf = pd.read_csv(symbolsFile,header=None, engine='python')
+    m = 0
+    for i in range(sdf.shape[0]):
+        tmp = sdf.iloc[i][0]
+        tmp = tmp.split()
+        if len(tmp) > m:
+            m = len(tmp)
+    r = range(m)
+    #names = map(str,r)
+    #names = list(names)
+    sdf = pd.read_csv(symbolsFile, sep=r'\s+', header=None, names= r,engine='python')  # NOTE: 7/20/26 - MF: changed to raw string
+    edf = pd.read_csv(entrezFile, sep=r'\s+', header=None, names= r,engine='python')  # NOTE: 7/20/26 - MF: changed to raw string
 
-    entrez_df = pd.read_csv(entrezFile, header=None)
-    entrez_df = entrez_df[0].str.split('\t', expand=True, n=2)
-    entrez_df.columns = ['pathway_names', "url", "entrez_ids"]
-    entrez_df['entrez_ids'] = entrez_df['entrez_ids'].str.split('\t')
+    # Accumulator list, symbol list, and entrezID list
+    acclist, symlist, idlist = [], [], []
 
-    # make gene by pathway binary matrix
-    pathway_list = symbols_df['pathway_names'].tolist()
-    gene_list = list(set([gene for sublist in symbols_df['gene_names'].tolist() for gene in sublist]))
-    gpm = pd.DataFrame(np.zeros((len(gene_list), len(pathway_list))),
-                            index=pd.Series(gene_list, name='genes'),
-                            columns=pd.Series(pathway_list, name='pathway'),
-                            dtype=bool)
-    
-    # fill out binary matrix
-    for pathway in pathway_list:
-        pathway_mask: pd.Series = symbols_df['pathway_names'] == pathway
-        genes_in_pathway = symbols_df.loc[pathway_mask, 'gene_names'].tolist()[0]
-        gpm.loc[genes_in_pathway, pathway] = True
-    
+    # Iterating over (3 to last) columns, building pathway, symbol and ID lists.
+    for i in range(2,sdf.shape[1]):
+        acclist += tuple(zip(sdf[0], sdf[i]))
+        symlist += list(sdf[i])
+        idlist += list(edf[i])
+
     # Creating dictionary for easy lookup of entrezID by symbol.
-    symboldict = {}
-    for symbol_genes, entrez_ids in zip(symbols_df['gene_names'].tolist(), entrez_df['entrez_ids'].tolist()):
-        for symbol, entrez_id in zip(symbol_genes, entrez_ids):
-            symboldict[symbol] = int(entrez_id)
+    symboldict = dict(zip(symlist, pd.to_numeric(idlist)))
 
-    # 6/25/26 MF - confirmed this gene by pathway matrix is correct and matches the original implementation
+    # Removing extraneous values from each list.
+    symboldict = filter(lambda k:   not math.isnan(k[1]), symboldict.items())
+    acclist = filter(lambda k: k[1] != None, acclist)
+    symlist = filter(lambda k: k != None, symlist)
+    idlist = filter(lambda k: not math.isnan(k), idlist)
+
+    # Set conversion to get unique entries, then numpy conversion for storage.
+    idlist = np.array(list(set(idlist)))
+    symlist = np.array(list(set(symlist)))
+    pwlist = np.array(list(sdf[0]))
+    symboldict = dict(set(symboldict))
+
+
+    # # Building gene pathway matrix (gpm) of appropriate size, and adding labels.
+    # gpm = pd.DataFrame(np.zeros((len(symlist), sdf.shape[0])),
+    #                             index=symlist, columns=pwlist, dtype = int)
+    sym_pos = {sym: i for i, sym in enumerate(symlist)}
+    pw_pos = {pw: j for j, pw in enumerate(pwlist)}
+    gpm_array = np.zeros((len(symlist), len(pwlist)), dtype=int)
+    
+    # Set conversion for unique values to iterate over.
+    accset = set(acclist)
+    for tup in accset:
+        # Marking true in gpm where symbol is in pathway.
+        # gpm[tup[0]][tup[1]] = 1
+        i = sym_pos.get(tup[0])
+        j = pw_pos.get(tup[1])
+        if i is not None and j is not None:
+            gpm_array[i, j] = 1
+        # NOTE: 7/20/26 - MF: a lot of warnings with performance issues.
+        # This should fix those and speed up a little.
+    gpm = pd.DataFrame(gpm_array, index=symlist, columns=pwlist, dtype=int)
+    
     # Converting data to pickle storage file with geneset class.
     geneset = gsc.genesetclass(symboldict, gpm)
-    symbols_pkl_file = symbolsFile.replace(".symbols.gmt", ".pkl")
-    symbols_pkl_file = symbols_pkl_file.replace("raw/", "intermediate/")
-    with open(symbols_pkl_file, 'wb') as file:
-        pickle.dump(geneset, file, protocol=pickle.HIGHEST_PROTOCOL)
+    symbolsFile = symbolsFile.replace(".symbols.gmt", ".pkl")
+    symbolsFile = symbolsFile.replace("raw/", "intermediate/")
+    final = open(symbolsFile, 'wb')
+    pickle.dump(geneset, final)
+    final.close()

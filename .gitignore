@@ -1,8 +1,9 @@
-*.pyc
+**.pyc
+**.ipynb_checkpoints/
+**__pycache__/
 
-TODO.md
-Testing.ipynb
-
+build/
+testing/
 data/
 
 intel*

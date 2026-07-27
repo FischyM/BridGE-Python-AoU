@@ -7,13 +7,13 @@ import copy
 
 
 
-def withinclassrand(seed, plinkCluster, datafile):
+def withinclassrand(seed,plinkCluster,datafile):
 	# load data file
 	pklin = open(datafile,'rb')
 	snpdata = pickle.load(pklin)
 	pklin.close()
 	# load cluster file
-	cluster_data = pd.read_csv(plinkCluster, header=None, sep=r"\s+", engine='python', dtype=str)
+	cluster_data = pd.read_csv(plinkCluster,header=None,sep=r'\s+',engine='python',dtype=str)
 	# match with snp data
 	fid = snpdata.fid.astype(str)
 	pid = snpdata.pid.astype(str)

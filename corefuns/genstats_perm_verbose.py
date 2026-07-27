@@ -12,7 +12,7 @@ from scipy.stats import norm
 from classes import bpmindclass as bpmc
 from classes import InteractionNetwork
 from classes import GenstatsOut, Stats
-# from corefuns import cyadd
+from corefuns import cyadd
 import sys
 import gc
 import time
@@ -41,7 +41,19 @@ np.seterr(divide='ignore', invalid='ignore')
 #       - risk_stats: Statistics for risk network including ranksum scores,empirical p-values, expected density for BPM/WPMs
 
 
+class par_rank_args:
+	def __init__(self,id,start,end):
+		self.id = id
+		self.bpmind1 = None
+		self.bpmind2 = None
+		self.start = start
+		self.end = end
 
+def init_worker(mm_in):
+	global shared_mm_c
+	shared_mm_c = mm_in
+ 
+ 
 class perm_args:
 	def __init__(self,id,share,bpmind1,bpmind2,bpmsum,ind2keep_bpm,ind2keep_wpm,ind2keep_path,wpmind,wpmsum,pathind,path_degree,idx1,idx2):
 		self.bpmind1 = copy.deepcopy(bpmind1)
@@ -59,22 +71,6 @@ class perm_args:
 		self.idx1 = idx1
 		self.idx2 = idx2
 
-class par_rank_args:
-	def __init__(self,id,start,end):
-		self.id = id
-		self.bpmind1 = None
-		self.bpmind2 = None
-		self.start = start
-		self.end = end
-
-
-
-
-def init_worker(mm_in):
-	global shared_mm_c
-	shared_mm_c = mm_in
-
-
 def init_worker_perm(mm_in,xs1,xs2):
 	global shared_mm_c
 	shared_mm_c = mm_in
@@ -84,9 +80,8 @@ def init_worker_perm(mm_in,xs1,xs2):
 
 	global shared_xs2
 	shared_xs2 = xs2
-		
-	
-	
+ 
+
 
 
 def call_chi2(table): ## input format (in each row): ## f11(bpm interactions) - f10(non-bpm interactions) - f01(bpm non-interations) - f00 (non-bpm non-interactions)
@@ -193,14 +188,14 @@ def snp_permutation_parallel(perm_args):
 	pathind = perm_args.pathind
 	path_degree = perm_args.path_degree
 	share = perm_args.share
-	idx1 = perm_args.idx1
-	idx2 = perm_args.idx2
+	idx1 = perm_args.idx1  # TODO: unneeded?
+	idx2 = perm_args.idx2  # TODO: unneeded?
 
 	mmtmp_c = np.ctypeslib.as_array(shared_mm_c)
 	mmtmp = np.copy(mmtmp_c)
 
-	xs1 = np.ctypeslib.as_array(shared_xs1)
-	xs2 = np.ctypeslib.as_array(shared_xs2)
+	xs1 = np.ctypeslib.as_array(shared_xs1)  # TODO: unneeded?
+	xs2 = np.ctypeslib.as_array(shared_xs2)  # TODO: unneeded?
 
 	# set seed based on id
 	np.random.seed(349898398+perm_args.id*1000)
@@ -222,8 +217,8 @@ def snp_permutation_parallel(perm_args):
 			t1 = datetime.datetime.now()
 			id1 = np.array(bpmind1[i])
 			id2 = np.array(bpmind2[i])
-			p1 = idx1[i]
-			p2 = idx2[i]
+			p1 = idx1[i]  # TODO: unneeded?
+			p2 = idx2[i]  # TODO: unneeded?
 			t2 = datetime.datetime.now()
 			dt = t2 - t1
 			d1 = d1 + dt.total_seconds() * 1000
@@ -244,6 +239,8 @@ def snp_permutation_parallel(perm_args):
 			wpmsum_tmp[i] = cyadd.csum(mmtmp,id1,id1)
 		count_wpm = count_wpm + (wpmsum_tmp > wpmsum[ind2keep_wpm])
 		## path degree permutation
+  		# TODO: can this be calculated earlier and then permuted the same way as BPM and WPM? - MathewF 9/22/25
+		# otherwise, this is very slow as it is snp_perms * num_pathways for mannwhitneyu test
 		path_degree_tmp = np.zeros(pathind.shape[0])
 		for i in range(pathind.shape[0]):
 			id1 = np.array(pathind[i])
@@ -275,6 +272,7 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 
 	mm = input_network
 	s = mm.shape[0]
+ 
 	bpm_size = bpm['size'].values.shape[0]
 	bpmsize = bpm['size'].values
 	ind1 = bpm['ind1'].values
@@ -286,14 +284,19 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 	wpmsize = wpm['size'].values
 	wpmindsize = wpm['indsize'].values
 	ind = wpm['ind'].values
+ 
+	
 	## ?Binary
 	if not binary_flag:
 		mm_stored = np.copy(mm)
 		mm[mm>=0.2] = 1
 		mm[mm<1] = 0
 	sumMM = np.sum(mm,1)
+ 
+ 
 	### BPM binary chi2
 	# bpm genetic interaction counts
+	t1 = datetime.datetime.now()
 	tr = []
 	bpmgi = np.zeros(bpm_size)
 	for i in range(bpm_size):
@@ -330,7 +333,10 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 
 	path1notgi = path1bgsize - path1bggi - bpmsize
 	path2notgi = path2bgsize - path2bggi - bpmsize
-
+	t2 = datetime.datetime.now()
+	print(f"\tTime for computing BPM counts: {t2 - t1}")
+ 
+ 
 	# call chi2
 	## build the tables
 	table1 = np.stack((bpmgi,path1bggi,bpmnotgi,path1notgi))
@@ -341,8 +347,12 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 	table2 = table2.transpose()
 	table2[tr,:] = 5
 	## call chi2
+	t1 = datetime.datetime.now()
 	chi2_bpm_1 = call_chi2(table1)
 	chi2_bpm_2 = call_chi2(table2)
+	t2 = datetime.datetime.now()
+	print(f"\tTime for chi2 calls (BPM): {t2 - t1}")
+ 
 	chi2_bpm_1 = np.log10(chi2_bpm_1) * -1
 	chi2_bpm_2 = np.log10(chi2_bpm_2) * -1
 	chi2_bpm_1[tr] = 0
@@ -386,6 +396,7 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 	bpmind2 = ind2_new[ind2keep_bpm]
 
 	###WPM Chi2
+	t1 = datetime.datetime.now()
 	wpmgi = np.zeros(wpm_size)
 	for i in range(wpm_size):
 		id1 = np.array(ind[i])
@@ -404,10 +415,15 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 
 	wpm_table = np.stack((wpmgi,pathbggi,wpmnotgi,pathbgnotgi))
 	wpm_table = wpm_table.transpose()
+	t2 = datetime.datetime.now()
+	print(f"\tTime for computing WPM counts: {t2 - t1}")
 
 
 	## call chi2
+	t1 = datetime.datetime.now()
 	chi2_wpm = call_chi2(wpm_table)
+	t2 = datetime.datetime.now()
+	print(f"\tTime for chi2 calls (WPM): {t2 - t1}")
 	chi2_wpm = np.log10(chi2_wpm) * -1
 
 	## consider under-enriched chi2s
@@ -422,8 +438,8 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 	##### mutual binary - bon-binary ends here
 
 	if binary_flag:
+		t1 = datetime.datetime.now()
 		## compute bpm interaction count and density for the remaining
-
 		bpmsum = np.zeros(ind1_new.shape[0])
 		bpmsum_tmp = np.zeros(bpmind1.shape[0])
 		density_bpm = np.zeros(ind1_new.shape[0])
@@ -448,8 +464,11 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 			wpmsum_tmp[i] = np.sum(mm[id1,:][:,id1])
 		density_wpm[ind2keep_wpm] = wpmsum_tmp/wpmsize[ind2keep_wpm]
 		wpmsum[ind2keep_wpm] = wpmsum_tmp
-
+		t2 = datetime.datetime.now()
+		print(f"\tBinary flag == True, uses sum(): Time for computing interaction count and density counts: {t2 - t1}")
+  
 	else:
+		t1 = datetime.datetime.now()
 		## restore non-binary mm
 		mm = mm_stored
 		## ranksum test
@@ -498,7 +517,7 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 		ind2keep_bpm = (bpm_local >= -1 * np.log10(0.05))
 
 		### wpm ranksum
-		denisty_wpm = np.zeros(wpm_size)
+		denisty_wpm = np.zeros(wpm_size)  # TODO: typo?
 		wpmsum_tmp = np.zeros(wpmind.shape[0])
 		wpmsum = np.zeros(wpm_size)
 		wpm_local_tmp = np.zeros(wpmind.shape[0])
@@ -518,8 +537,12 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 		wpm_local[ind2keep_wpm] = -1 * np.log10(wpm_local_tmp)
 		wpmsum[ind2keep_wpm] = wpmsum_tmp
 		ind2keep_wpm = (wpm_local >= -1 * np.log10(0.05)) 
-
+		t2 = datetime.datetime.now()
+		print(f"\tBinary flag == False, uses ranksum(): Time for computing interaction count and density counts (is parallelized for BPM): {t2 - t1}")
+  
 	gc.collect()
+
+	t1 = datetime.datetime.now()
 	## compute expected bpm density
 	sumMM = np.sum(mm,1)
 	bpmind1 = ind1_new[ind2keep_bpm]
@@ -554,17 +577,20 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 		p = p2[1] 
 		path_degree[i] =  -1 * np.log10(p)
 	ind2keep_path = (path_degree >= -1 * np.log10(0.1) )
-
+	t2 = datetime.datetime.now()
+	print(f"\tTime for computing expected densities and path degree: {t2 - t1}")
 
 
 	gc.collect()
+ 
+	t1 = datetime.datetime.now()
 	## random snp permutation to compute emirical p-value for the significant bpms
 	np.random.seed(349898398)
 	bpm_local_pv = np.ones(ind1_new.shape[0])
 	wpm_local_pv = np.ones(wpm_size)
 	path_degree_pv = np.ones(wpm_size)
-	arr = np.arange(s)
-	wpm_local_pv
+	# arr = np.arange(s)
+	# wpm_local_pv
 	wpmind = ind[ind2keep_wpm]
 	pathind = ind[ind2keep_path]
 
@@ -580,6 +606,13 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 	idx1_unique = np.unique(idx1)
 	idx2_unique = np.unique(idx2)
 
+	pre_comp1 = np.zeros((s,wpm_size))
+	for ptw in idx1_unique:
+		loc = np.where(idx1 == ptw)
+		loc = loc[0][0]
+		id1 = np.array(bpmind1[loc])
+		pre_comp1[id1,ptw] = 1
+  
 	pre_comp2 = np.zeros((s,wpm_size))
 	for ptw in idx2_unique:
 		loc = np.where(idx2 == ptw)
@@ -587,17 +620,10 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 		id2 = np.array(bpmind2[loc])
 		pre_comp2[id2,ptw] = 1
 
-	pre_comp1 = np.zeros((s,wpm_size))
-	for ptw in idx1_unique:
-		loc = np.where(idx1 == ptw)
-		loc = loc[0][0]
-		id1 = np.array(bpmind1[loc])
-		pre_comp1[id1,ptw] = 1
-
 	xs1 = np.ctypeslib.as_ctypes(pre_comp1)
 	xs1 = sharedctypes.RawArray(xs1._type_, xs1)
 
-	xs2 = np.ctypeslib.as_ctypes(pre_comp1)
+	xs2 = np.ctypeslib.as_ctypes(pre_comp2)  # TODO: Typo? This use to say pre_comp1
 	xs2 = sharedctypes.RawArray(xs2._type_, xs2)
 
 
@@ -634,6 +660,8 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 		count_wpm = count_wpm + results[proc][1]
 		count_path = count_path + results[proc][2]
 
+	t2 = datetime.datetime.now()
+	print(f"\tTime for SNP permutations (is parallelized): {t2 - t1}")
 
 
 	bpm_local_pv[ind2keep_bpm] = (count_bpm + 1) / snpPerms
@@ -666,11 +694,25 @@ def genstats(ssmfile,bpmfile,binary_flag,snpPerms,minPath,n_workers,netDensity=N
 			p_network[p_network>=p_cutoff] = 1
 			r_network[r_network<r_cutoff] = 0
 			r_network[r_network>=r_cutoff] = 1
+
+	print("\n\nStarting protective genstats...")
+	t1 = datetime.datetime.now()
 	p_bpm_local,p_bpm_local_pv,p_density_bpm,p_density_bpm_expected,p_dense_index,p_wpm_local,p_wpm_local_pv,p_density_wpm,p_density_wpm_expected,p_path_degree,p_path_degree_pv = rungenstats(p_network,bpm,wpm,minPath, binary_flag,snpPerms,n_workers)
+	t2 = datetime.datetime.now()
+	print(f"Protective network time - {t2 - t1}")
 	p_stats = Stats.Stats(p_bpm_local,p_bpm_local_pv,p_density_bpm,p_density_bpm_expected,p_dense_index,p_wpm_local,p_wpm_local_pv,p_density_wpm,p_density_wpm_expected,p_path_degree,p_path_degree_pv)
+
+
+	print("\n\nStarting risk genstats...")
+	t1 = datetime.datetime.now()
 	r_bpm_local,r_bpm_local_pv,r_density_bpm,r_density_bpm_expected,r_dense_index,r_wpm_local,r_wpm_local_pv,r_density_wpm,r_density_wpm_expected,r_path_degree,r_path_degree_pv = rungenstats(r_network,bpm,wpm,minPath, binary_flag,snpPerms,n_workers)
-	gc.collect()	
+	t2 = datetime.datetime.now()
+	print(f"Risk network time - {t2 - t1}")
+ 
+	gc.collect()
 	r_stats = Stats.Stats(r_bpm_local,r_bpm_local_pv,r_density_bpm,r_density_bpm_expected,r_dense_index,r_wpm_local,r_wpm_local_pv,r_density_wpm,r_density_wpm_expected,r_path_degree,r_path_degree_pv)
+ 
+ 
 	out_obj = GenstatsOut.GenstatsOut(p_stats,r_stats)
 	tmp = ssmfile.split('/')
 	tmp[-1] = 'genstats_' + tmp[-1]

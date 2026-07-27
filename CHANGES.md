@@ -1,0 +1,171 @@
+# List of changes made to BridGE when refactoring to work with biobank scale whole genome sequencing data
+
+## Run times
+
+python bridge.py --projectDir=testing --job=ComputeInteraction --model=combined --nWorker=30 --njobs=10 --R=5
+
+| Module | time old (min) | time new (min) |
+| --- | --- | --- |
+| DataProcess | 0 | 0 |
+| ComputeInteraction | ~360 | 36 |
+| ComputeStats | 3 | 0 |
+| ComputeFDR | 4 | 0 |
+| Summarize | 5 | 0 |
+
+## Python packages and environment
+
+- all packages were downloaded to their latest version for python 3.12
+- use polars for dataframe operations instead of pandas TODO:
+
+This appears to be what is needed for the python version of BridGE
+
+```bash
+# use miniforge to replace future conda enviornments 
+conda create -name bridge-aou -c conda-forge python=3.12 matplotlib networkx numpy pandas scipy seaborn cython
+```
+
+however, I would add the following:
+
+```bash
+conda create -name bridge-aou -c conda-forge python=3.12 matplotlib networkx numpy pandas scipy seaborn cython jupyterlab ipython scikit-learn polars bioconda::pgenlib
+pip install polars-bio  # might not be needed TODO:
+conda env export > updated-environment.yml
+# conda env create -f updated-environment.yml
+```
+
+TODO: Then, find a consensus between what the updated BridGE environment needs and my PGI environment
+
+## Plink
+
+- updated to plink2 softare and pgen file format
+- plink2 AVX2 optimized version was downloaded
+
+## Processing before BridGE / Filtering of genotype data
+
+### The following is what we have previously filtered for in 3-get_genotypes.ipynb
+
+| description | command line arg |
+| ----------- | ----------- |
+| remove samples identified by AoU | --remove samples_to_remove.txt |
+| keep only snps | --snps-only just-acgt |
+| exclude all biallelic A/T and C/G SNPs | --exclude-palindromic-snps |
+| Exclude all unplaced and non-autosomal variants. | --autosome |
+| filters out variants with missing call rates exceeding the provided value | --geno 0.01 |
+| filters out variants with allele frequency below the provided threshold | --maf 0.05 |
+
+### We will preprocess the data before running BridGE in 4-prepare_data.ipynb
+
+In BridGE, GWAS data is preprocessed in the following way (found in preprocessgwas.sh)
+
+Remove samples and variants that are missing for than the given threshold.
+```plink2 --pfile {inPlinkFile} --hwe 0.000001 0.001 --make-pgen --out {outPlinkFile}```
+
+These scripts can be skipped as they are taken care in the following ways
+
+- extractchr1-22.sh: can be replaced with --autosome, which was implemented in the previous filtering step
+- excludenogenotypesnps.sh: can be replaced by using pgen file format which automatically removes variants without assigned genotypes
+- removerelatedindividual.sh: Remove related individuals, which was already calculated by AoU and implemented in the previous filtering step
+- matchcasecontrol.sh: matches case to controls by computing IBD, clustering with .genome file, and selects for each case a corresponding control that are most similar to eachother. This could get expensive for AoU, so we will instead skip this step and keep all samples
+
+Get a less redundant SNP set based on R2
+```plink2 --pfile {inPlinkFile} --indep-pairwise 50 5 0.1 --out {outPlinkFile}```
+
+Compute all R2 pairwise data to later be used in get_interaction_list. In plink2, you will need to specify if the data is phased or unphased.
+```plink2 --pfile {inPlinkFile} --r2-[un]phased square```
+
+Overall, the plink2 commands that have run in part 4-prepare_data are these:
+
+```bash
+# filter out for HWE and LD. just write snplist that passes and filter on that. No need to duplicate genotype data
+plink2 --pfile {input_file} --hwe 0.000001 0.001 midp keep-fewhet --write-snplist --indep-pairwise 50 5 0.1 --out {output_file}
+
+# save filtered variants and filtered samples into pgen file
+plink2 --pfile {input_file} --extract-intersect {snplist1} {snplist2} --keep {keeplist} --make-pgen --out {output_file}
+
+# modify gene list file from Plink to filter out snps that are not within or near coding genes
+plink2 --pfile {input_file} --extract bed1 {gene_list} --make-pgen --out {output_file}
+
+# calculate pairwise R2 for each chromosome
+plink2 --pfile {input_file} --r2-unphased square bin4 --out {output_file} --chr {i}
+# stich chromosome R2 together as diagonal blocks of a whole R2 matrix. Done with python.
+```
+
+### Imputation
+
+Since AoU has diverse ancestry samples, we fill in any missing variant values (we are not imputing variants that were not genotypes) that were set that way by AoU quality filtering. This involves selecting the statistically phased genomic regions that overlap with out data. This is done in with plink, bcftools, and python.
+
+## Files - Other
+
+- added function definitions where reasonable TODO:
+- cyadd.pyx: changed variable type definition to work with updated numpy version
+- bridge.py was refactored to use argparse and reusbale functions
+
+## Classes
+
+- merged all separate classes into one python file TODO:
+
+## DataProcess using Datatools
+
+- merge all separate files into one python file? TODO:
+- bindataa.py
+  - This implementation's result matches the older version.
+  - redundantly saves SNPdata class. Instead, run the code in this file whenever a dominant or recessive data type is needed.
+- bpmind.py
+  - This implementation's result matches the older version.
+  - spmatrix was refactored so that there are no values larger than 1, these checks aren't needed anymore
+  - wpmdata size does not divide by two like you would for an n choose k problem where k=2. This may be an error or it could be accounted for later on. This will need to be confirmed. TODO:
+- imputesnp.py
+  - no longer needed as imputation should be done outside of BridGE, as detailed in my AoU repo. This is to account for the fact that the All of Us data has a diverse ancestry and basic imputation would only work for samples of the same ancestry.
+- mapsnp2gene.py
+  - This implementation's result matches the older version.
+  - adjustments for pgen file and variant ids is renamed since we can't use rsIDs for whole genome SNPs. This change needs to be propagated throughout the code and classes. TODO:
+  - replaced lambda filtering for numpy boolean arrays to speed up computations.
+  - snp-gene matrix is saved using bools instead of int.
+- msigdb2pkl.py
+  - This implementation's result matches the older version.
+  - jagged csv files are read differently. I keep 3 columns, of which, the gene name column holds a list of genes that are in each pathway.
+  - a binary (boolean) matrix is created and used that fills entries array-wise based on genes in each pathway.
+  - Optionally, I'm thinking of adding a Jaccard filtering criteria to the pathways. TODO:
+- plink2pkl.py
+  - This implementation's result matches the older version.
+  - Changed to use pgen file format with --export A option in plink2.
+  - Will need to change to loading with pgenlib to make it cleaner and so that I don't have to save a large genotype file as a raw text file. TODO:
+  - sparseness of the genotype file should be assessed to see whether or not it would be worth saveing as a sparse array. TODO:
+- snppathway.py
+  - This implementation's result matches the older version.
+  - speed improvements with numpy array broadcasting when testing if pathway size is between 10 and 300
+  - create a snp to pathway matrix using sparse dot product which speeds up this calculation tremendously
+  - checks again now if pathways size is between 10 and 300 for SNPs this time.
+  - removing any SNPs not in pathways, and any pathways with no SNPs.
+
+TODO: after confirming the modules after this are correct implementations of the previous BridGE version, recheck that these datatools are also working as intended and match the older version's results.
+
+## ComputeInteraction
+
+- This implementation's result matches the older version.
+- matrix_operations_par.py
+  - change numpy array data type to float32 instead of float64 to reduce RAM usage. TODO:
+  - kept the splitting of jobs implementation, however, I noticed that numpy uses all available CPUs for mat mul calculations. Therefore, instead of running split jobs simultaneously across workers (which would could also increase RAM usage with a large number of SNPs), I split jobs with n_jobs and n_workers are used within each job. This means that we can adjust how big the total SNP-SNP interaction computation is (n_jobs, reduce RAM usage) while still using many workers to run all the hypergeometric tests.
+    - n_jobs won't make this module run any faster, but helps to keep RAM usage down if you have a system with that restriction
+    - n_workers will reduce the time it takes to run this module
+    - This could be advantageous for the VM options given by AoU, such as using the high-cpu VMs.
+  - Using sparse arrays for interaction network to save space. Need to convert to save just as coo and convert to csr when needed? TODO:
+  - Claude found a way to reduce 12 mat muls to 2, so instead of computing g10/g01/g00/x10/x01/x00 separately for both protective and risk networks, these are derived from row/column sums of g11/x11. This also removes dense intermediate arrays.
+  - removed multiprocessing initialization of args and global variables.
+  - updated random seed generation of permuted pheno index. Wondering if this will need to be enhanced with ancestry information for AoU? TODO:
+  - parallel pool is creatd in bridge.py so that we don't have to keep creating and closing workers, especially if we can use --R=5 to run all of the random networks sequentially, which is more doable with the efficient computations that have been implemented.
+- hygetest.py
+  - combined with HygeCache.py into one file.
+  - increased maxsize lru_cache from 100,000 to 2,000,000. No noticible increase in RAM with test data. Will need to test if I could instead use functools.cache (lighter weight) and see if RAM takes a big hit vs. computation time TODO:
+  - Switched from computing cumulative distribution function `1 - hypergeom.cdf()` to equivalent survival function `hypergeom.df()` as this will give greater numeric accuracy.
+  - double checked and confirmed that even though the arg order is different to `_hyge_single()`, it is equivalent to the previous version, but this ordering made more sense to me.
+- HygeCache.py
+  - added in functionality that splits the hypergeom tests into chunks per number of workers in a multiprocessing pool. More workers means this part will run faster and it won't increase RAM usage dramatically.
+
+## ComputeStats
+
+## ComputeFDR
+
+## Summarize
+
+- no changes

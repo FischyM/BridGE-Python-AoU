@@ -12,7 +12,7 @@ from scipy.stats import norm
 from classes import bpmindclass as bpmc
 from classes import InteractionNetwork
 from classes import GenstatsOut, Stats
-# from corefuns import cyadd
+from corefuns import cyadd
 import sys
 import gc
 import time
@@ -264,8 +264,7 @@ def snp_permutation_parallel(perm_args):
 
 
 
-def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers): 
-    ## all inputs are classes,loaded from the corresponding pickle file
+def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers): ## all inputs are classes,loaded from the corresponding pickle file
 	## inputs:
 	## - input_network: numpy matrix of interaction network
 	## - bpm: bpm dataframe

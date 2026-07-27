@@ -2,13 +2,12 @@
 
 This is the github repository for the Python version of BridGE
 
-
 ## Data Processing
 To run:
 `python3 bridge.py --job=DataProcess --options`
 
 Options:
---plinkFile = path to plink input file without extention. 
+--plinkFile = path to plink input file without extention.
 --geneAnnotation = path to gene annotation file
 --genesets = path to geneset reference
 --mappingDistance = SNP to Gene mapping distance(in bp)
@@ -18,6 +17,7 @@ Example:
 `python3 bridge.py --job=DataProcess --plinkFile=data/gwas_data_final`
 
 ## Compute Interaction network
+
 To run:
 `python3 bridge.py --job=ComputeInteraction --options`
 
@@ -29,6 +29,7 @@ Example:
 `python3 bridge.py --job=ComputeInteraction --model=RR --nWorker=6 --samplePerms=10`
 
 ## Sample Permutation
+
 To run:
 `python3 bridge.py --job=ComputeInteraction --options`
 
