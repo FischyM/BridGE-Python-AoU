@@ -1,7 +1,7 @@
-**.pyc
 **.ipynb_checkpoints/
 **__pycache__/
 
+height_analysis/
 build/
 testing/
 data/

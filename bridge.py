@@ -118,11 +118,6 @@ def run_compute_interaction(args):
         else:
             ci.run(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i)
 
-    # TODO: additonally, track the resource usage if lru_cache is allowed to grow unlimited
-    # which would just need to change to functools.cache
-    
-    # close out the pool
-    # TODO: print out hyge cache info
     pool.close()
     pool.join()
 
@@ -133,17 +128,22 @@ def run_compute_stats(args):
     require_exists(bpmfile)
     _snp_data_files(args)
 
+    if args.n_jobs < 2:
+        args.n_jobs = 2
+        print("n_jobs should never be less than 2 for computing stats. n_jobs will be changed to 2")
+        
     if args.ssmfile is not None:
         ssmfile = f"{args.project_dir}/intermediate/{args.ssmfile}"
+        print(f'Computing statistics: {args.ssmfile}')
         gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snpPerms,
-                    args.minPath, args.n_workers, args.densitycutoff)
-        return
-
-    indices = range(args.r + 1) if args.r >= 0 else [args.i]
-    for i in indices:
-        ssmfile = _ssm_filename(args.project_dir, args.model, i)
-        gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snpPerms,
-                    args.minPath, args.n_workers, args.densitycutoff)
+                    args.minPath, args.n_jobs, args.n_workers, args.densitycutoff)
+    else:
+        indices = range(args.r + 1) if args.r >= 0 else [args.i]
+        for i in indices:
+            ssmfile = _ssm_filename(args.project_dir, args.model, i)
+            print(f'Computing statistics: R={i} model={args.model}')
+            gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snpPerms,
+                        args.minPath, args.n_jobs, args.n_workers, args.densitycutoff)
 
 def run_compute_fdr(args):
     bpmfile = f"{args.project_dir}/intermediate/BPMind.pkl"

@@ -41,7 +41,6 @@ np.seterr(divide='ignore', invalid='ignore')
 #       - risk_stats: Statistics for risk network including ranksum scores,empirical p-values, expected density for BPM/WPMs
 
 
-
 class perm_args:
 	def __init__(self,id,share,bpmind1,bpmind2,bpmsum,ind2keep_bpm,ind2keep_wpm,ind2keep_path,wpmind,wpmsum,pathind,path_degree,idx1,idx2):
 		self.bpmind1 = copy.deepcopy(bpmind1)
@@ -67,13 +66,9 @@ class par_rank_args:
 		self.start = start
 		self.end = end
 
-
-
-
 def init_worker(mm_in):
 	global shared_mm_c
 	shared_mm_c = mm_in
-
 
 def init_worker_perm(mm_in,xs1,xs2):
 	global shared_mm_c
@@ -84,10 +79,6 @@ def init_worker_perm(mm_in,xs1,xs2):
 
 	global shared_xs2
 	shared_xs2 = xs2
-		
-	
-	
-
 
 def call_chi2(table): ## input format (in each row): ## f11(bpm interactions) - f10(non-bpm interactions) - f01(bpm non-interations) - f00 (non-bpm non-interactions)
 	tests = table.shape[0]
@@ -138,8 +129,6 @@ def ranksum(x,y): ## custom ranksukm similar to the Matlab version
 	z = (wx - wmean - 0.5)/ np.sqrt(wvar)
 	p = norm.cdf(-z)
 	return p
-
-
 
 def parallel_ranksum(job_arg):
 	bpmind1 = job_arg.bpmind1
@@ -256,13 +245,6 @@ def snp_permutation_parallel(perm_args):
 			path_degree_tmp[i] =  -1 * np.log10(p)
 		count_path = count_path + (path_degree_tmp > path_degree[ind2keep_path])
 	return count_bpm,count_wpm,count_path
-
-
-
-
-
-
-
 
 def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers): 
     ## all inputs are classes,loaded from the corresponding pickle file
@@ -662,10 +644,13 @@ def genstats(ssmfile,bpmfile,binary_flag,snpPerms,minPath,n_workers,netDensity=N
 		else:
 			p_cutoff = np.quantile(p_network,1-netDensity)
 			r_cutoff = np.quantile(r_network,1-netDensity)
+   
 			p_network[p_network<p_cutoff] = 0
 			p_network[p_network>=p_cutoff] = 1
+   
 			r_network[r_network<r_cutoff] = 0
 			r_network[r_network>=r_cutoff] = 1
+   
 	p_bpm_local,p_bpm_local_pv,p_density_bpm,p_density_bpm_expected,p_dense_index,p_wpm_local,p_wpm_local_pv,p_density_wpm,p_density_wpm_expected,p_path_degree,p_path_degree_pv = rungenstats(p_network,bpm,wpm,minPath, binary_flag,snpPerms,n_workers)
 	p_stats = Stats.Stats(p_bpm_local,p_bpm_local_pv,p_density_bpm,p_density_bpm_expected,p_dense_index,p_wpm_local,p_wpm_local_pv,p_density_wpm,p_density_wpm_expected,p_path_degree,p_path_degree_pv)
 	r_bpm_local,r_bpm_local_pv,r_density_bpm,r_density_bpm_expected,r_dense_index,r_wpm_local,r_wpm_local_pv,r_density_wpm,r_density_wpm_expected,r_path_degree,r_path_degree_pv = rungenstats(r_network,bpm,wpm,minPath, binary_flag,snpPerms,n_workers)
@@ -679,10 +664,3 @@ def genstats(ssmfile,bpmfile,binary_flag,snpPerms,minPath,n_workers,netDensity=N
 	pickle.dump(out_obj, final)
 	final.close()
 	return
-
-
-
-
-
-
-
