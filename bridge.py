@@ -134,14 +134,14 @@ def run_compute_stats(args):
         
     if args.ssmfile is not None:
         ssmfile = f"{args.project_dir}/intermediate/{args.ssmfile}"
-        print(f'Computing statistics: {args.ssmfile}')
+        print(f'Computing statistics on {args.ssmfile}')
         gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snpPerms,
                     args.minPath, args.n_jobs, args.n_workers, args.densitycutoff)
     else:
         indices = range(args.r + 1) if args.r >= 0 else [args.i]
         for i in indices:
             ssmfile = _ssm_filename(args.project_dir, args.model, i)
-            print(f'Computing statistics: R={i} model={args.model}')
+            print(f'Computing statistics on {args.model}_R{i}')
             gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snpPerms,
                         args.minPath, args.n_jobs, args.n_workers, args.densitycutoff)
 

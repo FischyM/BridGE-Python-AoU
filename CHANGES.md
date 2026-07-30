@@ -164,6 +164,23 @@ TODO: after confirming the modules after this are correct implementations of the
 
 ## ComputeStats
 
+- bpmind.py saves wpmsize as (n^2 - n) TODO:
+  - since it's a within pathway there are duplicates within this symmetric matrix and wpmsize instead should be (n^2 - n) / 2.
+  - In WPM chi2 calculations, it does appear that wpmgi is calculated as the full matrix, so then the size would be doubled and this would then be accounted for
+- binarizing the network when binary_flag is false TODO:
+  - uses a cutoff of 0.2, or ~0.63 pvalue
+  - should this be lowered to a threshold of 1.0 which corresponds to a pvalue threshold of 0.1, the same threshold used for chi2 filtering?
+- wpm ranksum calculation
+  - original code had "density_wpm" misspelled as "denisty_wpm", so the density_wpm variable had the old calculated densities from WPM chi2 calculations.
+  - for WPMs that pass ranksum and are kept have their densities updated from a new wpmsum, but the older densities that passed chi2 but not ranksums are kept in this returned array
+  - This isn't an issue and has no consequences as density_wpm is save but not used in calculating fdr or summarizing results
+- Noticebly, the number of pathways that pass chi2 and then ranksums aren't too different, only a small reduction most of the time
+- changed dense arrays to sparse arrays
+- n_workers is used to speed up chi2 and ranksum for BPMs and for SNP perms
+- Similar to ComputeInteractions, use n_jobs arg to control how much RAM is used by splitting the problem into smaller parts.
+  - Recommend a test run with n_jobs=10, monitor RAM, and lower n_jobs to speed up computation time for the rest of the jobs you want to run.
+- Random seed generation is now reproducible. Before, your permutations would differ if you used a different number of workers. Now each worker sets the same seed, but depending on what section of the total SNP perms that a worker will compute, it burns the previous number of SNP perms to get to the same permutation for the number of SNP perms for a given seed. TODO: add in a seed arg to control what random permutations get seeded with. Allows for reproducibility but also flexibility if someone wants to do different seeds for whatever reason.
+
 ## ComputeFDR
 
 ## Summarize

@@ -191,7 +191,10 @@ def snp_permutation_parallel(perm_args):
 	xs1 = np.ctypeslib.as_array(shared_xs1)
 	xs2 = np.ctypeslib.as_array(shared_xs2)
 
-	# set seed based on id
+	# set seed based on id (or the number of the worker)
+	# each worker has a different seed, but this means that using a different number 
+	# of workers will result in different permutations. 
+	# This is not ideal, but it is how the original code worked.
 	np.random.seed(349898398+perm_args.id*1000)
 
 	# permutation
@@ -269,9 +272,9 @@ def rungenstats(input_network,bpm,wpm,minPath,binary_flag,snpPerms,n_workers):
 	wpmindsize = wpm['indsize'].values
 	ind = wpm['ind'].values
 	## ?Binary
-	if not binary_flag:
+	if not binary_flag:  # if true, mm is already binarized, so we don't need to do anything
 		mm_stored = np.copy(mm)
-		mm[mm>=0.2] = 1
+		mm[mm>=0.2] = 1  
 		mm[mm<1] = 0
 	sumMM = np.sum(mm,1)
 	### BPM binary chi2
