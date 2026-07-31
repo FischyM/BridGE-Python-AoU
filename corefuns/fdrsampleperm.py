@@ -3,7 +3,9 @@ import pickle
 import numpy as np
 import pandas as pd
 
-from classes import Stats, GenStats, FDRstats
+from classes.Stats import Stats
+from classes.GenstatsOut import GenstatsOut
+from classes.fdrresultsclass import fdrrclass
 
 
 # fdrsampleperm() computes False Discovery Rates for BPM/WPM/PATH modules
@@ -219,7 +221,7 @@ def fdrsampleperm(ssmFile, pcut, N):
 
         ## load genstats file
         with open(genstatsfile, "rb") as pklin:
-            gs: GenStats = pickle.load(pklin)
+            gs: GenstatsOut = pickle.load(pklin)
 
         prot: Stats = gs.protective_stats
         risk: Stats = gs.risk_stats
@@ -255,7 +257,7 @@ def fdrsampleperm(ssmFile, pcut, N):
     ssm_tmp = ssmFile.split('/')
     ssm_tmp[-1] = 'results_' + ssm_tmp[-1]
     outfilename = '/'.join(ssm_tmp)
-    save_obj = FDRstats(
+    save_obj = fdrrclass(
         bpm_pv, wpm_pv, path_pv,
         bpm_ranksum, wpm_ranksum, path_ranksum,
         fdrBPM1, fdrBPM2, fdrWPM1, fdrWPM2, fdrPATH1, fdrPATH2,

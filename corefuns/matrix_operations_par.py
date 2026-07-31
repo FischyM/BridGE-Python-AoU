@@ -307,7 +307,7 @@ def combine(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R):
     risk_max, risk_max_id = combine_max(rr_network.risk, rd_network.risk, dd_network.risk)
     protective_max, protective_max_id = combine_max(rr_network.protective, rd_network.protective, dd_network.protective)
 
-    network = InteractionNetwork.InteractionNetwork(risk_max, protective_max, risk_max_id, protective_max_id)
+    network = InteractionNetwork(risk_max, protective_max, risk_max_id, protective_max_id)
     
     output_name = f"{project_dir}/intermediate/ssM_mhygessi_combined_R{R}.pkl"
     with open(output_name, 'wb') as final:

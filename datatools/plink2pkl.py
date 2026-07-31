@@ -2,7 +2,7 @@ import pickle
 
 import pandas as pd
 
-from classes import SNPdata
+from classes.SNPdataclass import SNPclass
 
 
 def assess_sparseness(df):
@@ -64,7 +64,7 @@ def plink2pkl(rawFile, pvarFile, psamFile, outputFile):
     data.columns = new_cols
 
     # Structuring data to be saved into pickle format.
-    snp_data = SNPdata(
+    snp_data = SNPclass(
         data=data, 
         varid=var_df.id,
         chrom=var_df.chrom,

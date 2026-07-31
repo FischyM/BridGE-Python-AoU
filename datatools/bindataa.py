@@ -1,7 +1,5 @@
 import pickle
 
-from classes import SNPdata
-
 def bindataa(project_dir, dataFile, expr):
     """Binarize 012 format SNP data based on dominant/recessive assumptions.
 
@@ -25,7 +23,7 @@ def bindataa(project_dir, dataFile, expr):
     
     # Reading in SNPdata datafile
     with open(dataFile, "rb") as file:
-        snp_data: SNPdata = pickle.load(file)
+        snp_data = pickle.load(file)
 
     # Checking expression flag to proceed as dominant or recessive (D or R).
     if expr == 'r' or expr == 'R':

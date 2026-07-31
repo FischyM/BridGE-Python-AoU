@@ -4,7 +4,7 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 
-from classes import BPMind, SNPset
+from classes.bpmindclass import bpmindclass
 
 
 def bpmind(snpPathwayFile):
@@ -22,7 +22,7 @@ def bpmind(snpPathwayFile):
 
     # Reading in data files
     with open(snpPathwayFile, "rb") as file:
-        snp_set: SNPset = pickle.load(file)
+        snp_set = pickle.load(file)
 
     # Retrieving pathways list from snp_set
     pathways = snp_set.pathways
@@ -81,7 +81,7 @@ def bpmind(snpPathwayFile):
     bpm = pd.DataFrame(bpmdata)
 
     # Reading bpm and wpm models into bpmind class for pickle storage.
-    bpmobj = BPMind(bpm, wpm)
+    bpmobj = bpmindclass(bpm, wpm)
 
     # Saving bpmind data to pickle file.
     with open(f"{project_dir}/BPMind.pkl", 'wb') as file:

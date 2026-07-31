@@ -7,7 +7,8 @@ import numpy as np
 from scipy.sparse import csr_array, issparse
 from scipy.stats import chi2, norm, rankdata
 
-from classes import Stats, GenStats
+from classes.Stats import Stats
+from classes.GenstatsOut import GenstatsOut
 np.seterr(divide='ignore', invalid='ignore')
 
 # genstats() computes BPM/WPM/PATH statistics. Can be run parallel.
@@ -835,7 +836,7 @@ def genstats(ssmfile, bpmfile, binary_flag, snpPerms, minPath, n_jobs, n_workers
     r_stats = Stats(*r_results)
     print()
 
-    out_obj = GenStats(p_stats, r_stats)
+    out_obj = GenstatsOut(p_stats, r_stats)
     tmp = ssmfile.split('/')
     tmp[-1] = 'genstats_' + tmp[-1]
     outputfile = '/'.join(tmp)

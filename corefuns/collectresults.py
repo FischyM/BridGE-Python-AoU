@@ -9,7 +9,8 @@ from corefuns import get_interaction_pair as gpair
 from corefuns import pathway_map as pmap
 
 # Imported so pickle can rebuild the objects stored in resultsfile / bpmindfile.
-from classes import BPMind, FDRstats
+from classes.bpmindclass import bpmindclass
+from classes.fdrresultsclass import fdrrclass
 
 FDR_STEP = 0.05
 
@@ -90,7 +91,7 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
     """
     n_levels = _fdr_levels(fdrcut)
     with open(resultsfile, 'rb') as fh:
-        results: FDRstats = pickle.load(fh)
+        results = pickle.load(fh)
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(resultsfile)))
 
     fdrBPM, fdrWPM, fdrPATH = results.fdrbpm2, results.fdrwpm2, results.fdrpath2
@@ -121,7 +122,7 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
     # get_interaction_pair loads it (and the geneset it points at) itself.
     if not (ind_bpm.empty and ind_wpm.empty and ind_path.empty):
         with open(bpmindfile, 'rb') as fh:
-            bpm_ind: BPMind = pickle.load(fh)
+            bpm_ind = pickle.load(fh)
         pathways = bpm_ind.wpm['pathway']
         path_ids = {name: i for i, name in enumerate(pathways)}
         n_bpm = len(bpm_ind.bpm.index)

@@ -3,7 +3,7 @@ import pickle
 import numpy as np
 import pandas as pd
 
-from classes import GeneSet
+from classes.genesetdataclass import genesetclass
 
 
 def msigdb2pkl(symbolsFile, entrezFile):
@@ -52,7 +52,7 @@ def msigdb2pkl(symbolsFile, entrezFile):
 
     # 6/25/26 MF - confirmed this gene by pathway matrix is correct and matches the original implementation
     # Converting data to pickle storage file with geneset class.
-    geneset = GeneSet(symboldict, gpm)
+    geneset = genesetclass(symboldict, gpm)
     symbols_pkl_file = symbolsFile.replace(".symbols.gmt", ".pkl")
     symbols_pkl_file = symbols_pkl_file.replace("raw/", "intermediate/")
     with open(symbols_pkl_file, 'wb') as file:
