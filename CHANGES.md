@@ -7,10 +7,10 @@ python bridge.py --projectDir=testing --job=ComputeInteraction --model=combined 
 | Module | time old (min) | time new (min) |
 | --- | --- | --- |
 | DataProcess | 0 | 0 |
-| ComputeInteraction | ~360 | 36 |
-| ComputeStats | 3 | 0 |
-| ComputeFDR | 4 | 0 |
-| Summarize | 5 | 0 |
+| ComputeInteraction | 1 hr per network | 5 min per network |
+| ComputeStats | 3 hr per network | 20 min per network |
+| ComputeFDR | 4 hr | instant |
+| Summarize | 5 min | 30 sec |
 
 ## Python packages and environment
 
