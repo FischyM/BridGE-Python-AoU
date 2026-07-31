@@ -1,40 +1,61 @@
-import numpy
-import math
-import pandas as pd
-from corefuns import hygetest as ht
+import functools
+
+import numpy as np
+from scipy.stats import hypergeom
 
 
-# HygeCache class is for computing bulk hypergeometric tests.
-# apply_hyge() function is called for computing multipe hypergeometric tests. Sample size, and case/control size is set when creating the object.
+# HYGETEST computes Hypergeometric cumulative distribution for
+# the given inputs.
+#
 # INPUTS:
-#	- g: genotype group size(sepcific class we're interested in draw)
-#	- x: number of samples with specific genotype in case/control group
-#	- case_flag: flag indicating which of the case_size or control_size is used.
+# n - is the population size
+# d - is the number of draws
+# k - is the number of successes
+# m - is the number of success states in the population
+#
+# OUTPUTS:
+# logpv - negative log10(p-value)
+# pv - p-value
+
+@functools.lru_cache(maxsize=2_000_000)  # TODO: let it grow to max size? theoretically there will be a ceiling...?
+def _hyge_single(n, d, g, x):
+    """Single-value hypergeom survival function, cached per (n, d, g, x)."""
+    return hypergeom.sf(x - 1, n, g, d)
+
+def _hyge_chunk(arg):
+    n, d, g_chunk, x_chunk = arg
+    out = np.empty(len(g_chunk), dtype=np.float64)
+    for i in range(len(g_chunk)):
+        out[i] = _hyge_single(n, d, g_chunk[i], x_chunk[i])
+    return out
 
 class HygeCache:
-	def __init__(self,sample_size,case_size,control_size):
-		self.sample_size = sample_size
-		self.case_size =  case_size
-		self.control_size = control_size
-		#self.cache = memoize(ht.hygetest)
+    """Drop-in replacement for HygeCache, but dispatches one value at a time
+    per worker with functools.lru_cache, instead of vectorized hypergeom.sf calls.
 
-	def hygetest_caller(self,input_row,case_flag):
-		# input_row is : genotype_size,x
-		# x is the number of phenotypes which have the genotype
-		if case_flag:
-			return ht.hygetest(self.sample_size,self.case_size,input_row[1],input_row[0])
-		else:
-			return ht.hygetest(self.sample_size,self.control_size,input_row[1],input_row[0])
+    Caching only pays off if (n, d, g, x) tuples repeat often within a worker's
+    lifetime across calls sharing the same pool. Since g/x are SNP pair counts
+    bounded by population/case size, repeats are plausible after int rounding -
+    but if most tuples are unique, the per-value Python loop + cache-miss overhead
+    will likely be slower than the vectorized scipy call. Worth benchmarking both
+    on real data before swapping in.
+    """
 
-	def call_hygetest(self,input_array,case_flag):
-		# input_array is : sample_size * genotype_size,x
-		# x is the number of phenotypes which have the genotype
-		result = numpy.apply_along_axis(self.hygetest_caller,0,input_array,case_flag)
-		return result
+    def __init__(self, sample_size, case_size, control_size):
+        self.sample_size = sample_size
+        self.case_size = case_size
+        self.control_size = control_size
 
-	def apply_hyge(self,g,x,case_flag):
-		## conacatinate to apply call_hygetest
-		y = numpy.stack((g,x))
-		raw_out = self.call_hygetest(y,case_flag)
-		return raw_out
+    def apply_hyge(self, g, x, case_flag, pool, n_workers):
+        d = self.case_size if case_flag else self.control_size
+        g_chunks = np.array_split(g, n_workers)
+        x_chunks = np.array_split(x, n_workers)
+        args = [(self.sample_size, d, gc, xc) for gc, xc in zip(g_chunks, x_chunks)]
+        results = pool.map(_hyge_chunk, args)
+        return np.concatenate(results)
 
+    @staticmethod
+    def cache_info():
+        """Inspect hit/miss rate to decide if caching is actually helping (call inside
+        a worker, e.g. via pool.apply, since each process has its own cache)."""
+        return _hyge_single.cache_info()

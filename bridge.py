@@ -3,16 +3,16 @@ import sys
 from os import path
 import multiprocessing as mp
 
-from corefuns_new import collectresults as cl
-from corefuns_new import fdrsampleperm as fdr
-from corefuns_new import genstats_perm as gs
-from corefuns_new import matrix_operations_par as ci
-from datatools_new import bindataa as ba
-from datatools_new import bpmind as bpm
-from datatools_new import mapsnp2gene as snp2gene
-from datatools_new import msigdb2pkl as msig2p
-from datatools_new import plink2pkl as p2p
-from datatools_new import snppathway as snpp
+from corefuns import collectresults as cl
+from corefuns import fdrsampleperm as fdr
+from corefuns import genstats_perm as gs
+from corefuns import matrix_operations_par as ci
+from datatools import bindataa as ba
+from datatools import bpmind as bpm
+from datatools import mapsnp2gene as snp2gene
+from datatools import msigdb2pkl as msig2p
+from datatools import plink2pkl as p2p
+from datatools import snppathway as snpp
 
 VALID_MODELS = {'RR', 'RD', 'DD', 'combined'}
 
@@ -27,8 +27,8 @@ def parse_args():
     p.add_argument('--minPath', type=int, default=10)
     p.add_argument('--maxPath', type=int, default=300)
     p.add_argument('--model', default=None)
-    p.add_argument('--njobs', dest='n_jobs', type=int, default=10)
-    p.add_argument('--nWorker', dest='n_workers', type=int, default=-1)
+    p.add_argument('--nJobs', dest='n_jobs', type=int, default=10)
+    p.add_argument('--nWorker', dest='n_workers', default=None)  # None means use all available cores
     p.add_argument('--samplePerms', dest='sample_perms', type=int, default=10)
     p.add_argument('--binaryNetwork', type=int, default=0)
     p.add_argument('--snpPerms', type=int, default=10000)
@@ -48,7 +48,6 @@ def parse_args():
     args.alpha2 = 0.05
     args.binaryNetwork = bool(args.binaryNetwork)
     return args
-
 
 def require_exists(*filepaths):
     for filepath in filepaths:
@@ -78,6 +77,7 @@ def run_data_process(args):
     if not args.plinkfile:
         sys.exit('plinkFile not provided')
 
+    # TODO: change these to use pgen files
     rawfile = f"{args.project_dir}/intermediate/{args.plinkfile}.raw"
     bimfile = f"{args.project_dir}/intermediate/{args.plinkfile}.bim"
     famfile = f"{args.project_dir}/intermediate/{args.plinkfile}.fam"
@@ -85,6 +85,7 @@ def run_data_process(args):
 
     finalfile = f"{args.project_dir}/intermediate/{args.plinkfile}.pkl"
     p2p.plink2pkl(rawfile, bimfile, famfile, finalfile)
+    # TODO: read in pgen file directly instead of converting to raw first
 
     ba.bindataa(args.project_dir, finalfile, 'r')
     ba.bindataa(args.project_dir, finalfile, 'd')
@@ -100,6 +101,7 @@ def run_data_process(args):
     require_exists(gene_annotation_file)
     sgmfile = f"{args.project_dir}/intermediate/snpgenemapping_{args.mappingDistance // 1000}kb.pkl"
     snp2gene.mapsnp2gene(bimfile, gene_annotation_file, args.mappingDistance, 'matrix', sgmfile)
+    # TODO: shouldn't this output also be a dataclass?
 
     geneset_pkl = f"{args.project_dir}/intermediate/{args.genesets}.pkl"
     outfile = snpp.snppathway(finalfile, sgmfile, geneset_pkl, args.minPath, args.maxPath)
@@ -146,16 +148,14 @@ def run_compute_stats(args):
                         args.minPath, args.n_jobs, args.n_workers, args.densitycutoff)
 
 def run_compute_fdr(args):
-    bpmfile = f"{args.project_dir}/intermediate/BPMind.pkl"
-    require_exists(bpmfile)
-
     if args.ssmfile is None:
         ssmfile = _ssm_filename(args.project_dir, args.model, 0)
     else:
         ssmfile = f"{args.project_dir}/intermediate/{args.ssmfile}"
     require_exists(ssmfile)
 
-    fdr.fdrsampleperm(ssmfile, bpmfile, args.pval_cutoff, args.minPath, args.sample_perms)
+    print(f'Computing FDR')
+    fdr.fdrsampleperm(ssmfile, args.pval_cutoff, args.sample_perms)
 
 def run_summarize(args):
     bpmfile = f"{args.project_dir}/intermediate/BPMind.pkl"
@@ -169,8 +169,8 @@ def run_summarize(args):
 
     if args.ssmfile is None:
         imported = False
-        ssmfile = _ssm_filename(args.project_dir, args.model, 0)
         resultsfile = f"{args.project_dir}/intermediate/results_ssM_mhygessi_{args.model}_R0.pkl"
+        ssmfile = _ssm_filename(args.project_dir, args.model, 0)
     else:
         imported = True
         resultsfile = f"{args.project_dir}/intermediate/results_{args.ssmfile}"

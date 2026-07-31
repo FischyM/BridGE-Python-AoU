@@ -1,322 +1,136 @@
-import pandas as pd
-import numpy as np
-import pickle
-from corefuns import bpmsim as bpmsim
-from corefuns import pathsim as pathsim
-from scipy import sparse
 import math
+import pickle
+
+import numpy as np
+import pandas as pd
+
+from classes import BPMind
+from corefuns import bpmsim, pathsim
+
+FDR_STEP = 0.05
+SIM_CUTOFF = 0.25
 
 
+def _greedy_groups(fdrs, similar):
+    """Assign redundancy groups walking from the most to the least significant module.
 
+    Each module joins the group of the first more-significant module it is
+    similar to, otherwise it starts a new group. This is deliberately not
+    connected-components: for a chain A~B, B~C where A is not similar to C, C
+    stays in B's group.
 
-# check_BPM_WPM_redundancy() finds redundant BPM/WPM/PATHs and group the similar ones into redundant groups for different FDR thresholds.
-#
-# INPUTS:
-#   fdrBPM: A dataframe contating the information(FDR,pathway names, etc) about BPMs that passed general FDR threshold 
-#   fdrWPM: A dataframe contating the information(FDR,pathway names, etc) about WPMs that passed general FDR threshold 
-#   fdrPATH: A dataframe contating the information(FDR,pathway names, etc) about PATHs that passed general FDR threshold 
-#   bpmindfile: file containing SNP ids for BPM/WPMs in pickle format.
-#   FDRcut: Maximum FDR threshold.
-#
-# OUTPUTS:
-#   returns an array containing 6 lists
-#       - BPM_nosig_noRD: List containing number of non-redundant BPMs for each FDR threshold(incremented by 0.05)
-#       - WPM_nosig_noRD: List containing number of non-redundant WPMs for each FDR threshold(incremented by 0.05)
-#       - PATH_nosig_noRD: List containing number of non-redundant PATHs for each FDR threshold(incremented by 0.05)
-#       - BPM_group: List of multiple lists each containing redundant group membership indices for BPMs in the same order as fdrBPM.
-#       - WPM_group: List of multiple lists each containing redundant group membership indices for WPMs in the same order as fdrwPM.
-#       - PATH_group: List of multiple lists each containing redundant group membership indices for PATHs in the same order as fdrPATH.
-# 
+    Args:
+        fdrs (Series): FDRs of the modules, indexed by global module index, in
+            the same row order as `similar`.
+        similar (ndarray): Boolean square matrix, True where two modules are
+            redundant. Rows and columns follow the row order of `fdrs`.
 
+    Returns:
+        Series: group label per module, indexed by global module index, ordered
+            by ascending FDR.
+    """
+    rank = fdrs.argsort(kind='stable').to_numpy()
+    labels = np.zeros(rank.shape[0], dtype=np.int64)
+    for x1 in range(1, rank.shape[0]):
+        for x2 in range(x1 + 1):
+            if x2 == x1:
+                labels[x1] = labels.max() + 1
+            elif similar[rank[x1], rank[x2]]:
+                labels[x1] = labels[x2]
+                break
+    return pd.Series(labels, index=fdrs.index[rank])
 
-def check_BPM_WPM_redundancy(fdrBPM,fdrWPM,fdrPATH,bpmindfile,FDRcut):
-    pklin = open(bpmindfile,"rb")
-    bpmind = pickle.load(pklin)
-    pklin.close()
+def _bpm_similar(bpmind, local_ind):
+    ind1 = bpmind.bpm['ind1'][local_ind]
+    ind2 = bpmind.bpm['ind2'][local_ind]
+    return bpmsim.bpmsim(ind1, ind2, ind1, ind2) >= SIM_CUTOFF
+
+def _wpm_similar(bpmind, local_ind):
+    ind = bpmind.wpm['ind'][local_ind]
+    return bpmsim.bpmsim(ind, ind, ind, ind) >= SIM_CUTOFF
+
+def _path_similar(bpmind, local_ind):
+    return pathsim.pathsim(bpmind.wpm['ind'][local_ind]) >= SIM_CUTOFF
+
+def _groups_at_threshold(fdr_frame, fdr_col, n_modules, fdrcut, bpmind, similar_fn):
+    """Redundancy groups for one module type at one FDR threshold.
+
+    Protective modules occupy global indices 0..n_modules-1 and risk modules
+    n_modules..2*n_modules-1. The two directions are grouped independently, then
+    the risk labels are offset so the two label sets do not collide.
+
+    Returns:
+        tuple[Series, int]: group label per module indexed by global module
+            index, and the total number of distinct groups.
+    """
+    ind = np.asarray(fdr_frame[fdr_frame <= fdrcut].dropna().index)
+    protective = ind[ind < n_modules]
+    risk = ind[ind >= n_modules]
+
+    parts, n_groups = [], 0
+    for global_ind, local_ind in ((protective, protective), (risk, risk - n_modules)):
+        if global_ind.size == 0:
+            continue
+        if global_ind.size == 1:
+            labels = pd.Series([0], index=global_ind, dtype=np.int64)
+        else:
+            fdrs = fdr_frame.loc[global_ind][fdr_col]
+            labels = _greedy_groups(fdrs, similar_fn(bpmind, local_ind))
+        parts.append(labels + n_groups)
+        n_groups += labels.nunique()
+
+    if not parts:
+        return pd.Series(dtype=np.int64), 0
+    return pd.concat(parts), n_groups
+
+def check_BPM_WPM_redundancy(fdrBPM, fdrWPM, fdrPATH, bpmindfile, FDRcut):
+    """Groups redundant BPMs/WPMs/PATHs at every 0.05 FDR threshold up to FDRcut.
+
+    Args:
+        fdrBPM (DataFrame): single FDR column 'bpm2'. Protective modules are the
+            first half of the rows, risk modules the second half.
+        fdrWPM (DataFrame): as above, column 'wpm2'.
+        fdrPATH (DataFrame): as above, column 'path2'.
+        bpmindfile (str): pickle with the SNP ids for each BPM/WPM.
+        FDRcut (float): highest FDR threshold to group at.
+
+    Returns:
+        tuple: six lists, each with one entry per 0.05 threshold from 0.05 up to
+        FDRcut:
+            - BPM_nosig_noRD, WPM_nosig_noRD, PATH_nosig_noRD (int): number of
+              non-redundant modules at that threshold.
+            - BPM_group, WPM_group, PATH_group (Series): group label per module,
+              indexed by GLOBAL MODULE INDEX and ordered by ascending FDR within
+              each effect direction. Callers must align by index, not position:
+              the ordering is protective-then-risk, which is not the same as
+              global FDR rank.
+    """
+    with open(bpmindfile, 'rb') as fh:
+        bpmind: BPMind = pickle.load(fh)
+
+    n_bpm = len(bpmind.bpm['size'])
+    n_wpm = len(bpmind.wpm['size'])
 
     BPM_group, BPM_nosig_noRD = [], []
     WPM_group, WPM_nosig_noRD = [], []
     PATH_group, PATH_nosig_noRD = [], []
 
-    start = 0.05
-    increment = 0.05
-    fdr_th = math.ceil(FDRcut/0.05)
+    for level in range(1, math.ceil(FDRcut / FDR_STEP) + 1):
+        fdrcut = level * FDR_STEP
 
-    # Adding increment to FDRcut for inclusive arange.
-    for f in range(1,fdr_th+1):
-        fdrcut = 0.05 * f
-        ind = np.array(fdrBPM[fdrBPM<=fdrcut].dropna().index)
-        nnz = (ind<=len(bpmind.bpm['size'])).sum()
+        labels, n_groups = _groups_at_threshold(
+            fdrBPM, 'bpm2', n_bpm, fdrcut, bpmind, _bpm_similar)
+        BPM_group.append(labels)
+        BPM_nosig_noRD.append(n_groups)
 
-        ind1 = ind[0:nnz]
-        ind2 = ind[nnz:] - len(bpmind.bpm['size'])
+        labels, n_groups = _groups_at_threshold(
+            fdrWPM, 'wpm2', n_wpm, fdrcut, bpmind, _wpm_similar)
+        WPM_group.append(labels)
+        WPM_nosig_noRD.append(n_groups)
 
-        ind = np.array(fdrWPM[fdrWPM<=fdrcut].dropna().index)
-        nnz = (ind<=len(bpmind.wpm['size'])).sum()
+        labels, n_groups = _groups_at_threshold(
+            fdrPATH, 'path2', n_wpm, fdrcut, bpmind, _path_similar)
+        PATH_group.append(labels)
+        PATH_nosig_noRD.append(n_groups)
 
-        ind3 = ind[0:nnz]
-        ind4 = ind[nnz:] - len(bpmind.wpm['size'])
-
-
-        group, BPM_sim, noRD = [0]*4, [0]*4, [0]*4
-
-        # Should ind have more than one row
-        if len(ind1) > 1:
-            bpm_ind1_ind1 = bpmind.bpm['ind1'][ind1]
-            bpm_ind2_ind1 = bpmind.bpm['ind2'][ind1]
-
-            BPM_sim[0] = bpmsim.bpmsim(bpm_ind1_ind1, bpm_ind2_ind1, bpm_ind1_ind1, bpm_ind2_ind1)
-
-            TTT = (BPM_sim[0]>=0.25).astype(int)
-            #noRD[0], group[0] = sparse.csgraph.connected_components(TTT)
-            ## retrieve indices and sort based on FDR
-            tmp_ind = ind1
-            fdrs = fdrBPM.loc[tmp_ind]['bpm2']
-            tmp_idx = fdrs.argsort(kind = 'stable').to_numpy()
-            fdrs_sorted = fdrs.iloc[tmp_idx]
-            ## search for group and assign
-            tmp_group = np.zeros((fdrs_sorted.shape[0],))
-            for x1 in range(fdrs_sorted.shape[0]):
-                if x1 == 0:
-                    continue
-                ttt_idx1 = tmp_idx[x1]
-                for x2 in range(x1+1):
-                    if x2 == x1:
-                        tmp_group[x1] = max(tmp_group) + 1
-                    else:
-                        ttt_idx2 = tmp_idx[x2]
-                        if TTT[ttt_idx1,ttt_idx2] == 1:
-                            tmp_group[x1] = tmp_group[x2]
-                            break
-            group[0] = tmp_group
-            a0=len(list(set(group[0])))
-
-        # Has exactly one row
-        elif len(ind1) == 1:
-            a0=1
-            group[0] = [0]
-        else:
-            a0=0
-            group[0] = []
-
-        # Should ind have more than one row
-        if len(ind2) > 1:
-            bpm_ind1_ind2 = bpmind.bpm['ind1'][ind2]
-            bpm_ind2_ind2 = bpmind.bpm['ind2'][ind2]
-
-            BPM_sim[1] = bpmsim.bpmsim(bpm_ind1_ind2, bpm_ind2_ind2, bpm_ind1_ind2, bpm_ind2_ind2)
-
-            TTT = (BPM_sim[1]>=0.25).astype(int)
-            #noRD[1], group[1] = sparse.csgraph.connected_components(TTT)
-            #b0=len(list(set(group[1])))
-            ## retrieve indices and sort based on FDR
-            tmp_ind = ind2 +  len(bpmind.bpm['size'])
-            fdrs = fdrBPM.loc[tmp_ind]['bpm2']
-            tmp_idx = fdrs.argsort(kind='stable').to_numpy()
-            fdrs_sorted = fdrs.iloc[tmp_idx]
-            ## search for group and assign
-            tmp_group = np.zeros((fdrs_sorted.shape[0],))
-            for x1 in range(fdrs_sorted.shape[0]):
-                if x1 == 0:
-                    continue
-                ttt_idx1 = tmp_idx[x1]
-                for x2 in range(x1+1):
-                    if x2 == x1:
-                        tmp_group[x1] = max(tmp_group) + 1
-                    else:
-                        ttt_idx2 = tmp_idx[x2]
-                        if TTT[ttt_idx1,ttt_idx2] == 1:
-                            tmp_group[x1] = tmp_group[x2]
-                            break
-            group[1] = tmp_group
-            b0=len(list(set(group[1])))
-            
-
-
-        # Has exactly one row
-        elif len(ind2) == 1:
-            b0=1
-            group[1] = [0]
-        else:
-            b0=0
-            group[1] = []
-
-        # Should ind have more than one row
-        if len(ind3) > 1:
-            wpm_ind_ind3 = bpmind.wpm['ind'][ind3]
-
-            BPM_sim[2] = bpmsim.bpmsim(wpm_ind_ind3, wpm_ind_ind3, wpm_ind_ind3, wpm_ind_ind3)
-
-            TTT = (BPM_sim[2]>=0.25).astype(int)
-            #noRD[2], group[2] = sparse.csgraph.connected_components(TTT)
-            ## retrieve indices and sort based on FDR
-            tmp_ind = ind3
-            fdrs = fdrWPM.loc[tmp_ind]['wpm2']
-            tmp_idx = fdrs.argsort(kind = 'stable').to_numpy()
-            fdrs_sorted = fdrs.iloc[tmp_idx]
-            ## search for group and assign
-            tmp_group = np.zeros((fdrs_sorted.shape[0],))
-            for x1 in range(fdrs_sorted.shape[0]):
-                if x1 == 0:
-                    continue
-                ttt_idx1 = tmp_idx[x1]
-                for x2 in range(x1+1):
-                    if x2 == x1:
-                        tmp_group[x1] = max(tmp_group) + 1
-                    else:
-                        ttt_idx2 = tmp_idx[x2]
-                        if TTT[ttt_idx1,ttt_idx2] == 1:
-                            tmp_group[x1] = tmp_group[x2]
-                            break
-            group[2] = tmp_group
-            c0=len(list(set(group[2])))
-
-
-        # Has exactly one row
-        elif len(ind3) == 1:
-            c0=1
-            group[2] = [0]
-        else:
-            c0=0
-            group[2] = []
-
-        # Should ind have more than one row
-        if len(ind4) > 1:
-            wpm_ind_ind4 = bpmind.wpm['ind'][ind4]
-
-            BPM_sim[3] = bpmsim.bpmsim(wpm_ind_ind4, wpm_ind_ind4, wpm_ind_ind4, wpm_ind_ind4)
-
-            TTT = (BPM_sim[3]>=0.25).astype(int)
-            #noRD[3], group[3] = sparse.csgraph.connected_components(TTT)
-            tmp_ind = ind4 + len(bpmind.wpm['size'])
-            fdrs = fdrWPM.loc[tmp_ind]['wpm2']
-            tmp_idx = fdrs.argsort(kind = 'stable').to_numpy()
-            fdrs_sorted = fdrs.iloc[tmp_idx]
-            ## search for group and assign
-            tmp_group = np.zeros((fdrs_sorted.shape[0],))
-            for x1 in range(fdrs_sorted.shape[0]):
-                if x1 == 0:
-                    continue
-                ttt_idx1 = tmp_idx[x1]
-                for x2 in range(x1+1):
-                    if x2 == x1:
-                        tmp_group[x1] = max(tmp_group) + 1
-                    else:
-                        ttt_idx2 = tmp_idx[x2]
-                        if TTT[ttt_idx1,ttt_idx2] == 1:
-                            tmp_group[x1] = tmp_group[x2]
-                            break
-            group[3] = tmp_group
-            d0=len(list(set(group[3])))
-
-
-        # Has exactly one row
-        elif len(ind4) == 1:
-            d0=1
-            group[3] = [0]
-        else:
-            d0=0
-            group[3] = []
-
-
-        g1 = len(list(set(group[0])))
-        g2 = len(list(set(group[1])))
-        g3 = len(list(set(group[2])))
-        g4 = len(list(set(group[3])))
-
-
-        BPM_group.append(list(group[0]) + list(map(lambda x : x + g1, list(group[1]))))
-        BPM_nosig_noRD.append(a0 + b0)
-
-        WPM_group.append(list(group[2]) + list(map(lambda x : x + g3, list(group[3]))))
-        WPM_nosig_noRD.append(c0 + d0)
-
-        ind = np.array(fdrPATH[fdrPATH<=fdrcut].dropna().index)
-        nnz = (ind<=len(bpmind.wpm['size'])).sum()
-
-        ind1 = ind[0:nnz]
-        ind2 = ind[nnz:] - len(bpmind.wpm['size'])
-
-        group, PATH_sim, noRD = [0]*2, [0]*2, [0]*2
-
-        # Should ind have more than one row
-        if len(ind1) > 1:
-            wpm_ind_ind1 = bpmind.wpm['ind'][ind1]
-
-            PATH_sim[0] = pathsim.pathsim(wpm_ind_ind1)
-            TTT = (PATH_sim[0]>=0.25).astype(int)
-            #noRD[0], group[0] = sparse.csgraph.connected_components(TTT)
-            tmp_ind = ind1
-            fdrs = fdrPATH.loc[tmp_ind]['path2']
-            tmp_idx = fdrs.argsort(kind = 'stable').to_numpy()
-            fdrs_sorted = fdrs.iloc[tmp_idx]
-            ## search for group and assign
-            tmp_group = np.zeros((fdrs_sorted.shape[0],))
-            for x1 in range(fdrs_sorted.shape[0]):
-                if x1 == 0:
-                    continue
-                ttt_idx1 = tmp_idx[x1]
-                for x2 in range(x1+1):
-                    if x2 == x1:
-                        tmp_group[x1] = max(tmp_group) + 1
-                    else:
-                        ttt_idx2 = tmp_idx[x2]
-                        if TTT[ttt_idx1,ttt_idx2] == 1:
-                            tmp_group[x1] = tmp_group[x2]
-                            break
-            group[0] = tmp_group
-            a0=len(list(set(group[0])))
-
-        # Has exactly one row
-        elif len(ind1) == 1:
-            a0=1
-            group[0] = [0]
-        else:
-            a0=0
-            group[0] = []
-
-        # Should ind have more than one row
-        if len(ind2) > 1:
-            wpm_ind_ind2 = bpmind.wpm['ind'][ind2]
-
-            PATH_sim[1] = pathsim.pathsim(wpm_ind_ind2)
-            TTT = (PATH_sim[1]>=0.25).astype(int)
-            #noRD[1], group[1] = sparse.csgraph.connected_components(TTT)
-            tmp_ind = ind2 + len(bpmind.wpm['size'])
-            fdrs = fdrPATH.loc[tmp_ind]['path2']
-            tmp_idx = fdrs.argsort(kind = 'stable').to_numpy()
-            fdrs_sorted = fdrs.iloc[tmp_idx]
-            ## search for group and assign
-            tmp_group = np.zeros((fdrs_sorted.shape[0],))
-            for x1 in range(fdrs_sorted.shape[0]):
-                if x1 == 0:
-                    continue
-                ttt_idx1 = tmp_idx[x1]
-                for x2 in range(x1+1):
-                    if x2 == x1:
-                        tmp_group[x1] = max(tmp_group) + 1
-                    else:
-                        ttt_idx2 = tmp_idx[x2]
-                        if TTT[ttt_idx1,ttt_idx2] == 1:
-                            tmp_group[x1] = tmp_group[x2]
-                            break
-            group[1] = tmp_group
-            b0=len(list(set(group[1])))
-
-        # Has exactly one row
-        elif len(ind2) == 1:
-            b0=1
-            group[1] = [1]
-        else:
-            b0=0
-            group[1] = []
-
-        g1 = len(list(set(group[0])))
-        g2 = len(list(set(group[1])))
-
-
-        PATH_group.append(list(group[0]) + list(map(lambda x : x + g1, list(group[1]))))
-        PATH_nosig_noRD.append(a0 + b0)
-
-
-    return BPM_nosig_noRD,WPM_nosig_noRD,PATH_nosig_noRD,BPM_group,WPM_group,PATH_group
+    return (BPM_nosig_noRD, WPM_nosig_noRD, PATH_nosig_noRD, BPM_group, WPM_group, PATH_group)
