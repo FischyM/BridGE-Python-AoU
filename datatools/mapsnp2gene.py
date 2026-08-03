@@ -14,10 +14,16 @@ def mapsnp2gene(pvarFile, geneAnnotation, mappingDistance, option, outfile):
         option (str): saving mode for snp-gene map.
         outfile (str): file name for saving the results.
     """
-
+    # # PVAR
+    # # Creating SNP dataframe from snp annotation file.
+    # pvar_header = ['chrom', 'pos', 'var_id', 'ref', 'alt']
+    # var_df = pd.read_csv(pvarFile, sep=r"\s+", header=0, names=pvar_header, engine='python')  # has header row
+    # var_df['chrom'] = pd.to_numeric(var_df['chrom'])
+    # TODO: change this when moving to .pvar file
+    # BIM
     # Creating SNP dataframe from snp annotation file.
-    pvar_header = ['chrom', 'pos', 'varid', 'ref', 'alt']
-    var_df = pd.read_csv(pvarFile, sep=r"\s+", header=0, names=pvar_header, engine='python')  # has header row
+    snph = ['chrom', 'var_id', 'tmp1', 'pos', 'ref', 'alt']
+    var_df = pd.read_csv(pvarFile, sep=r"\s+", names=snph, engine='python')
     var_df['chrom'] = pd.to_numeric(var_df['chrom'])
 
     # Creating gene dataframe from gene annotation file.
@@ -38,14 +44,15 @@ def mapsnp2gene(pvarFile, geneAnnotation, mappingDistance, option, outfile):
     cdf = cdf[(cdf['pos'] >= cdf['geneloc1']) & (cdf['pos'] <= cdf['geneloc2'])]
     
     # Creating list of unique rsids from filtered results.
-    snplist = cdf['varid'].drop_duplicates()
+    snplist = cdf['var_id'].drop_duplicates()
 
     # Option chosen to save to snplist.
     if (option == 'snplist'):
 
         # Saving SNPlist to pickle file.
-        with open(outfile, 'wb') as file:
-            pickle.dump(snplist, file)
+        final = open(outfile, 'wb')
+        pickle.dump(snplist, final, protocol=pickle.HIGHEST_PROTOCOL)
+        final.close()
 
     # Option chosen to save to matrix.
     elif (option == 'matrix'):
@@ -59,11 +66,12 @@ def mapsnp2gene(pvarFile, geneAnnotation, mappingDistance, option, outfile):
 
         # Setting snp-gene matrix values to true if snp is within gene window.
         for row in cdf.itertuples():
-            sgm.loc[row.varid, row.genes] = True
+            sgm.loc[row.var_id, row.genes] = True
 
         # Saving snp-gene matrix to pickle file.
-        with open(outfile, 'wb') as file:
-            pickle.dump(sgm, file)
+        final = open(outfile, 'wb')
+        pickle.dump(sgm, final, protocol=pickle.HIGHEST_PROTOCOL)
+        final.close()
 
     else:
         # Output option not recognized.

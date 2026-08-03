@@ -38,7 +38,7 @@ def snppathway(dataFile, sgmFile, genesets, minPath, maxPath):
 
     # find the snps in SNPdata (plink data) that are also in the snp-gene matrix
     # since the snp-gene matrix was created from the plink data, this is simply a sanity check that runs fast
-    tmp_ids = np.intersect1d(snp_data.varid, sgm.index)
+    tmp_ids = np.intersect1d(snp_data.var_id, sgm.index)
     ind_ids = sgm.index.isin(tmp_ids)
     tmp_sgm = sgm.loc[ind_ids, :]
 

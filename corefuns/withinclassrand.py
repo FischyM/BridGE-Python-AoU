@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import pickle
-from classes import SNPset
+from classes.snpsetclass import snpsetclass
 import sys
 import copy
 

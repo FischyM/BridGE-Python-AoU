@@ -4,8 +4,8 @@ import pickle
 import numpy as np
 import pandas as pd
 
-from classes import BPMind
-from corefuns import bpmsim, pathsim
+from corefuns import bpmsim as bpmsim
+from corefuns import pathsim as pathsim
 
 FDR_STEP = 0.05
 SIM_CUTOFF = 0.25
@@ -106,7 +106,7 @@ def check_BPM_WPM_redundancy(fdrBPM, fdrWPM, fdrPATH, bpmindfile, FDRcut):
               global FDR rank.
     """
     with open(bpmindfile, 'rb') as fh:
-        bpmind: BPMind = pickle.load(fh)
+        bpmind = pickle.load(fh)
 
     n_bpm = len(bpmind.bpm['size'])
     n_wpm = len(bpmind.wpm['size'])
@@ -118,18 +118,15 @@ def check_BPM_WPM_redundancy(fdrBPM, fdrWPM, fdrPATH, bpmindfile, FDRcut):
     for level in range(1, math.ceil(FDRcut / FDR_STEP) + 1):
         fdrcut = level * FDR_STEP
 
-        labels, n_groups = _groups_at_threshold(
-            fdrBPM, 'bpm2', n_bpm, fdrcut, bpmind, _bpm_similar)
+        labels, n_groups = _groups_at_threshold(fdrBPM, 'bpm2', n_bpm, fdrcut, bpmind, _bpm_similar)
         BPM_group.append(labels)
         BPM_nosig_noRD.append(n_groups)
 
-        labels, n_groups = _groups_at_threshold(
-            fdrWPM, 'wpm2', n_wpm, fdrcut, bpmind, _wpm_similar)
+        labels, n_groups = _groups_at_threshold(fdrWPM, 'wpm2', n_wpm, fdrcut, bpmind, _wpm_similar)
         WPM_group.append(labels)
         WPM_nosig_noRD.append(n_groups)
 
-        labels, n_groups = _groups_at_threshold(
-            fdrPATH, 'path2', n_wpm, fdrcut, bpmind, _path_similar)
+        labels, n_groups = _groups_at_threshold(fdrPATH, 'path2', n_wpm, fdrcut, bpmind, _path_similar)
         PATH_group.append(labels)
         PATH_nosig_noRD.append(n_groups)
 

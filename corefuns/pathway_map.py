@@ -8,7 +8,9 @@ from matplotlib.lines import Line2D
 from matplotlib import rcParams
 from matplotlib.backends.backend_pdf import PdfPages
 
-from classes import BPMind
+from classes import bpmindclass
+from classes import fdrresultsclass
+from corefuns import check_BPM_WPM_redundancy as cbwr
 
 # draw_map() draws a non-redundant network map of the significant BPMs/WPMs/PATHs.
 #
@@ -32,7 +34,7 @@ def draw_map(project_dir,fdrcut,resultsfile,BPM_group_tmp,WPM_group_tmp,PATH_gro
     # load BPMind.pkl file
     bpm_file = project_dir + '/intermediate/BPMind.pkl'
     with open(bpm_file,'rb') as f:
-        bpm_ind: BPMind = pickle.load(f)
+        bpm_ind = pickle.load(f)
 
     bpm = bpm_ind.bpm
     wpm = bpm_ind.wpm

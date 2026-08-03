@@ -4,13 +4,13 @@
 
 python bridge.py --projectDir=testing --job=ComputeInteraction --model=combined --nWorker=30 --njobs=10 --R=5
 
-| Module | time old (min) | time new (min) |
-| --- | --- | --- |
-| DataProcess | 0 | 0 |
-| ComputeInteraction | 1 hr per network | 5 min per network |
-| ComputeStats | 3 hr per network | 20 min per network |
-| ComputeFDR | 4 hr | instant |
-| Summarize | 5 min | 30 sec |
+| Module | time old | time new | speed up |
+| --- | --- | --- | --- |
+| DataProcess | 11 min | 4 min | 2.74x |
+| ComputeInteraction | 1 hr per network | 6 min per network | 10x |
+| ComputeStats | 3 hr per network | 20 min per network | 9x |
+| ComputeFDR | 4 hr | 3 sec | 4800x |
+| Summarize | 5 min | 30 sec | 10x |
 
 ## Python packages and environment
 
@@ -105,14 +105,19 @@ Since AoU has diverse ancestry samples, we fill in any missing variant values (w
 
 ## Classes
 
-- merged all separate classes into one python file TODO:
+- merge all separate classes into one python file TODO:
 
 ## DataProcess using Datatools
 
 - merge all separate files into one python file? TODO:
+- plink2pkl.py
+  - This implementation's result matches the older version.
+  - Changed to use pgen file format with --export A option in plink2.
+  - Will need to change to loading with pgenlib to make it cleaner and so that I don't have to save a large genotype file as a raw text file. TODO:
+  - sparseness of the genotype file should be assessed to see whether or not it would be worth saveing as a sparse array. TODO:
 - bindataa.py
   - This implementation's result matches the older version.
-  - redundantly saves SNPdata class. Instead, run the code in this file whenever a dominant or recessive data type is needed.
+  - redundantly saves SNPdata class. Instead, run the code in this file whenever a dominant or recessive data type is needed. TODO:
 - bpmind.py
   - This implementation's result matches the older version.
   - spmatrix was refactored so that there are no values larger than 1, these checks aren't needed anymore
@@ -129,11 +134,7 @@ Since AoU has diverse ancestry samples, we fill in any missing variant values (w
   - jagged csv files are read differently. I keep 3 columns, of which, the gene name column holds a list of genes that are in each pathway.
   - a binary (boolean) matrix is created and used that fills entries array-wise based on genes in each pathway.
   - Optionally, I'm thinking of adding a Jaccard filtering criteria to the pathways. TODO:
-- plink2pkl.py
-  - This implementation's result matches the older version.
-  - Changed to use pgen file format with --export A option in plink2.
-  - Will need to change to loading with pgenlib to make it cleaner and so that I don't have to save a large genotype file as a raw text file. TODO:
-  - sparseness of the genotype file should be assessed to see whether or not it would be worth saveing as a sparse array. TODO:
+
 - snppathway.py
   - This implementation's result matches the older version.
   - speed improvements with numpy array broadcasting when testing if pathway size is between 10 and 300
@@ -172,7 +173,7 @@ TODO: after confirming the modules after this are correct implementations of the
   - In WPM chi2 calculations, it does appear that wpmgi is calculated as the full matrix, so then the size would be doubled and this would then be accounted for
 - binarizing the network when binary_flag is false TODO:
   - uses a cutoff of 0.2, or ~0.63 pvalue
-  - should this be lowered to a threshold of 1.0 which corresponds to a pvalue threshold of 0.1, the same threshold used for chi2 filtering?
+  - should this be lowered to a threshold of 1.0 which corresponds to a pvalue threshold of 0.1, the same threshold used for chi2 filtering? TODO:
 - wpm ranksum calculation
   - original code had "density_wpm" misspelled as "denisty_wpm", so the density_wpm variable had the old calculated densities from WPM chi2 calculations.
   - for WPMs that pass ranksum and are kept have their densities updated from a new wpmsum, but the older densities that passed chi2 but not ranksums are kept in this returned array

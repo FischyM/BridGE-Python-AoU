@@ -95,7 +95,7 @@ def run_data_process(args):
     entrezfile = f"{args.project_dir}/raw/{args.genesets}.entrez.gmt"
     require_exists(symbolsfile, entrezfile)
     msig2p.msigdb2pkl(symbolsfile, entrezfile)
-    # TODO: reduce gene set based on Jaccard similarity
+    # TODO: reduce gene set based on Jaccard similarity?
 
     gene_annotation_file = f"{args.project_dir}/raw/{args.gene_annotation}"
     require_exists(gene_annotation_file)
@@ -117,6 +117,7 @@ def run_compute_interaction(args):
     for i in indices:
         if args.model == 'combined':
             ci.combine(args.project_dir, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i)
+            print("\n")
         else:
             ci.run(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i)
 

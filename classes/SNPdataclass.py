@@ -1,10 +1,10 @@
 class SNPclass():
-    def __init__(self, data, rsid, chr, loc, pheno, fid, pid, gender):
+    def __init__(self, data, varid, chrom, pos, pheno, fid, iid, sex):
         self.data = data
-        self.rsid = rsid
-        self.chr = chr
-        self.loc = loc
+        self.varid = varid
+        self.chrom = chrom
+        self.pos = pos
         self.pheno = pheno
         self.fid = fid
-        self.pid = pid
-        self.gender = gender
+        self.iid = iid
+        self.sex = sex
