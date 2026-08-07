@@ -12,6 +12,8 @@ python bridge.py --projectDir=testing --job=ComputeInteraction --model=combined 
 | ComputeFDR | 4 hr | 3 sec | 4800x |
 | Summarize | 5 min | 30 sec | 10x |
 
+If extended to 1 real network and 20 random networks (using the test data provided [446 samples, 15k SNPs, 2232 pathways] and only 100 snp perms instead of 10000), this would originally take 88 hrs sequentially vs. now it takes 9 hours sequentially and uses less storage for interaction networks.
+
 ## Python packages and environment
 
 - all packages were downloaded to their latest version for python 3.12
