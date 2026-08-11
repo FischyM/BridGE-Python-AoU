@@ -101,12 +101,12 @@ Since AoU has diverse ancestry samples, we fill in any missing variant values (w
 ## Files - Other
 
 - added function definitions where reasonable TODO:
-- cyadd.pyx: changed variable type definition to work with updated numpy version
+- cyadd.pyx: removed as this is no longer needed
 - bridge.py was refactored to use argparse and reusbale functions
 
 ## Classes
 
-- merge all separate classes into one python file TODO:
+- merge all separate classes into one python file
 
 ## DataProcess using Datatools
 
