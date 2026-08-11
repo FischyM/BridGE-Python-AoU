@@ -6,12 +6,7 @@ from corefuns import collectresults as cl
 from corefuns import fdrsampleperm as fdr
 from corefuns import genstats_perm as gs
 from corefuns import matrix_operations_par as ci
-from datatools import bindataa as ba
-from datatools import bpmind as bpm
-from datatools import mapsnp2gene as snp2gene
-from datatools import msigdb2pkl as msig2p
-from datatools import plink2pkl as p2p
-from datatools import snppathway as snpp
+import datatools
 
 VALID_MODELS = {'RR', 'RD', 'DD', 'combined'}
 
@@ -79,35 +74,35 @@ def run_data_process(args):
     if not args.plinkfile:
         sys.exit('plinkFile not provided')
 
-    # TODO: change these to use pgen files
+    # TODO: change these to use both pgen and bed file types from plink2
     rawfile = f"{args.project_dir}/intermediate/{args.plinkfile}.raw"
     bimfile = f"{args.project_dir}/intermediate/{args.plinkfile}.bim"
     famfile = f"{args.project_dir}/intermediate/{args.plinkfile}.fam"
     require_exists(rawfile, bimfile, famfile)
 
     finalfile = f"{args.project_dir}/intermediate/{args.plinkfile}.pkl"
-    p2p.plink2pkl(rawfile, bimfile, famfile, finalfile)
+    datatools.plink2pkl(rawfile, bimfile, famfile, finalfile)
     # TODO: read in pgen file directly instead of converting to raw first
 
-    ba.bindataa(args.project_dir, finalfile, 'r')
-    ba.bindataa(args.project_dir, finalfile, 'd')
+    datatools.bindataa(args.project_dir, finalfile, 'r')
+    datatools.bindataa(args.project_dir, finalfile, 'd')
     # TODO: remove these and simply load the original data and change to r or d as needed.
 
     symbolsfile = f"{args.project_dir}/raw/{args.genesets}.symbols.gmt"
     entrezfile = f"{args.project_dir}/raw/{args.genesets}.entrez.gmt"
     require_exists(symbolsfile, entrezfile)
-    msig2p.msigdb2pkl(symbolsfile, entrezfile)
+    datatools.msigdb2pkl(symbolsfile, entrezfile)
     # TODO: reduce gene set based on Jaccard similarity?
 
     gene_annotation_file = f"{args.project_dir}/raw/{args.gene_annotation}"
     require_exists(gene_annotation_file)
     sgmfile = f"{args.project_dir}/intermediate/snpgenemapping_{args.mappingDistance // 1000}kb.pkl"
-    snp2gene.mapsnp2gene(bimfile, gene_annotation_file, args.mappingDistance, 'matrix', sgmfile)
+    datatools.mapsnp2gene(bimfile, gene_annotation_file, args.mappingDistance, 'matrix', sgmfile)
     # TODO: shouldn't this output also be a dataclass?
 
     geneset_pkl = f"{args.project_dir}/intermediate/{args.genesets}.pkl"
-    outfile = snpp.snppathway(finalfile, sgmfile, geneset_pkl, args.minPath, args.maxPath)
-    bpm.bpmind(outfile)
+    outfile = datatools.snppathway(finalfile, sgmfile, geneset_pkl, args.minPath, args.maxPath)
+    datatools.bpmind(outfile)
 
 def run_compute_interaction(args):
     _require_model(args)
