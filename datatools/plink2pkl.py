@@ -2,7 +2,7 @@ import pickle
 
 import pandas as pd
 
-from classes.SNPdataclass import SNPclass
+from classes import SNPclass
 
 
 def assess_sparseness(df):
@@ -19,7 +19,7 @@ def assess_sparseness(df):
     sparsity = ((df == 0) | df.isnull()).sum().sum() / (len(df) * len(df.columns))
     print(f"Sparsity (zeros + missing): {sparsity:.2%}")
     
-def plink2pkl(rawFile, pvarFile, psamFile, outputFile):
+def plink2pkl(pgenFile, pvarFile, psamFile, outputFile):
     """Convert plink .pgen file to pickle file format.
         
     This function extracts all information from the .pgen file and 
@@ -47,13 +47,17 @@ def plink2pkl(rawFile, pvarFile, psamFile, outputFile):
     
     # Creating headers for columns reading files into dataframes.
     pvar_header = ['chrom', 'pos', 'id', 'ref', 'alt']
+    # var_header = ['pos', 'id', 'ref', 'alt', 'qual', 'filter', 'info', 'format', 'cm']
     var_df = pd.read_csv(pvarFile, sep=r"\s+", header=0, names=pvar_header, engine='python')
 
     psam_header = ['fid', 'iid', 'sex', 'pheno']
+    # psam_header = ['iid', 'sid', 'pat', 'mat', 'sex', 'pheno']
     sam_df = pd.read_csv(psamFile, sep=r"\s+", header=0, names=psam_header, engine='python')
 
-    geno_df = pd.read_csv(rawFile, sep=r"\s+", header=0, engine='python')
+    # TODO: read this in with Pgenlib
+    geno_df = pd.read_csv(pgenFile, sep=r"\s+", header=0, engine='python')
 
+    # TODO: this may not be needed with Pgenlib
     # need to flip 0 and 2 counts, since plink's --export A counts the ref alleles
     data = 2 - geno_df[geno_df.columns[6:]]
     assess_sparseness(data)

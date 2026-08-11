@@ -3,9 +3,7 @@ import pickle
 import numpy as np
 import pandas as pd
 
-from classes.Stats import Stats
-from classes.GenstatsOut import GenstatsOut
-from classes.fdrresultsclass import fdrrclass
+from classes import Stats, GenstatsOut, fdrrclass
 
 
 # fdrsampleperm() computes False Discovery Rates for BPM/WPM/PATH modules

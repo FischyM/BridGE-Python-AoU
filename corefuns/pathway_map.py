@@ -1,7 +1,6 @@
 import pickle
 
 import numpy as np
-import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -9,8 +8,6 @@ from matplotlib import rcParams
 from matplotlib.backends.backend_pdf import PdfPages
 
 from classes import bpmindclass
-from classes import fdrresultsclass
-from corefuns import check_BPM_WPM_redundancy as cbwr
 
 # draw_map() draws a non-redundant network map of the significant BPMs/WPMs/PATHs.
 #
@@ -28,16 +25,18 @@ from corefuns import check_BPM_WPM_redundancy as cbwr
 #   <project_dir>/results/network-map-<ssmfile>.pdf
 
 
-def draw_map(project_dir,fdrcut,resultsfile,BPM_group_tmp,WPM_group_tmp,PATH_group_tmp,bpm_limit=20):
+# TODO: redo the refactoring of this file
+
+def draw_map(project_dir, fdrcut, resultsfile, BPM_group_tmp, WPM_group_tmp, PATH_group_tmp, bpm_limit=20):
     rcParams['font.family'] = 'sans-serif'
 
     # load BPMind.pkl file
-    bpm_file = project_dir + '/intermediate/BPMind.pkl'
-    with open(bpm_file,'rb') as f:
-        bpm_ind = pickle.load(f)
+    bpm_file = f"{project_dir}/intermediate/BPMind.pkl"
+    with open(bpm_file, 'rb') as fh:
+        bpmind: bpmindclass = pickle.load(fh)
 
-    bpm = bpm_ind.bpm
-    wpm = bpm_ind.wpm
+    bpm = bpmind.bpm
+    wpm = bpmind.wpm
     wpm_size = wpm.shape[0]
     bpm_size = bpm.shape[0]
 

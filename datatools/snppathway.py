@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import csr_array
 
-from classes.snpsetclass import snpsetclass
+from classes import SNPclass, genesetclass, snpsetclass
 
 
 def snppathway(dataFile, sgmFile, genesets, minPath, maxPath):
@@ -30,15 +30,15 @@ def snppathway(dataFile, sgmFile, genesets, minPath, maxPath):
 
     # Reading in data files
     with open(dataFile, "rb") as file:
-        snp_data = pickle.load(file)
+        snp_data: SNPclass = pickle.load(file)
     with open(sgmFile, "rb") as file:
         sgm: pd.DataFrame = pickle.load(file)  # snps are rows, genes are columns
     with open(genesets, "rb") as file:
-        geneset = pickle.load(file)
+        geneset: genesetclass = pickle.load(file)
 
     # find the snps in SNPdata (plink data) that are also in the snp-gene matrix
     # since the snp-gene matrix was created from the plink data, this is simply a sanity check that runs fast
-    tmp_ids = np.intersect1d(snp_data.var_id, sgm.index)
+    tmp_ids = np.intersect1d(snp_data.varid, sgm.index)
     ind_ids = sgm.index.isin(tmp_ids)
     tmp_sgm = sgm.loc[ind_ids, :]
 

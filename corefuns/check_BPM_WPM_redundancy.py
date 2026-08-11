@@ -1,15 +1,14 @@
-import math
-import pickle
+import math, pickle
 
 import numpy as np
 import pandas as pd
 
-from corefuns import bpmsim as bpmsim
-from corefuns import pathsim as pathsim
+from classes import bpmindclass
+from corefuns import bpmsim, pathsim
+
 
 FDR_STEP = 0.05
 SIM_CUTOFF = 0.25
-
 
 def _greedy_groups(fdrs, similar):
     """Assign redundancy groups walking from the most to the least significant module.
@@ -106,7 +105,7 @@ def check_BPM_WPM_redundancy(fdrBPM, fdrWPM, fdrPATH, bpmindfile, FDRcut):
               global FDR rank.
     """
     with open(bpmindfile, 'rb') as fh:
-        bpmind = pickle.load(fh)
+        bpmind: bpmindclass = pickle.load(fh)
 
     n_bpm = len(bpmind.bpm['size'])
     n_wpm = len(bpmind.wpm['size'])

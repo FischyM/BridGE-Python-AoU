@@ -3,6 +3,7 @@
 This is the github repository for the Python version of BridGE
 
 ## Data Processing
+
 To run:
 `python3 bridge.py --job=DataProcess --options`
 

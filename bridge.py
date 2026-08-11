@@ -1,5 +1,4 @@
-import argparse
-import sys
+import argparse, sys
 from os import path
 import multiprocessing as mp
 
@@ -69,6 +68,9 @@ def _snp_data_files(args):
 
 def _ssm_filename(project_dir, model, r_index):
     return f"{project_dir}/intermediate/ssM_mhygessi_{model}_R{r_index}.pkl"
+
+
+# Module Functions
 
 def run_data_process(args):
     print('data processing...')

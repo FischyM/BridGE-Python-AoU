@@ -5,7 +5,7 @@ from datetime import datetime
 from os import path
 
 import numpy as np
-from scipy.sparse import coo_array
+from scipy.sparse import coo_array, csr_array
 
 from corefuns import HygeCache as hc
 from corefuns import withinclassrand as wrand
@@ -258,6 +258,21 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
         pickle.dump(network, final)   
 
 def combine_max(rr, rd, dd):
+    """Combine three sparse matrices (RR, RD, DD) into a single sparse matrix of elementwise max values.
+    
+    1 == RR was max
+    2 == DD was max
+    3 == RD was max
+
+    Args:
+        rr (csr_array): recessive risk/protective matrix
+        rd (csr_array): recessive-dominant risk/protective matrix
+        dd (csr_array): dominant risk/protective matrix
+
+    Returns:
+        network_max (csr_array): max of the three matrices, elementwise
+        network_max_id (csr_array): id of which matrix was max (1=RR, 2=DD, 3=RD)
+    """
     # elementwise max across the three — already sparse-native (unchanged from your code)
     network_max_temp = rr.maximum(dd)
     network_max = network_max_temp.maximum(rd)
@@ -298,11 +313,11 @@ def combine(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R):
 
     ## load results for 3 models
     with open(f"{project_dir}/intermediate/ssM_mhygessi_RR_R{R}.pkl", 'rb') as rr_file:
-        rr_network = pickle.load(rr_file)
+        rr_network: InteractionNetwork = pickle.load(rr_file)
     with open(f"{project_dir}/intermediate/ssM_mhygessi_RD_R{R}.pkl", 'rb') as rd_file:
-        rd_network = pickle.load(rd_file)
+        rd_network: InteractionNetwork = pickle.load(rd_file)
     with open(f"{project_dir}/intermediate/ssM_mhygessi_DD_R{R}.pkl", 'rb') as dd_file:
-        dd_network = pickle.load(dd_file)
+        dd_network: InteractionNetwork = pickle.load(dd_file)
 
     risk_max, risk_max_id = combine_max(rr_network.risk, rd_network.risk, dd_network.risk)
     protective_max, protective_max_id = combine_max(rr_network.protective, rd_network.protective, dd_network.protective)

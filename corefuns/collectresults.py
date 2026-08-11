@@ -1,19 +1,16 @@
-import os
-import pickle
+import os, pickle
 
 import numpy as np
 import pandas as pd
 
+from classes import fdrrclass, bpmindclass
 from corefuns import check_BPM_WPM_redundancy as cbwr
 from corefuns import get_interaction_pair as gpair
 from corefuns import pathway_map as pmap
 
-# Imported so pickle can rebuild the objects stored in resultsfile / bpmindfile.
-from classes.bpmindclass import bpmindclass
-from classes.fdrresultsclass import fdrrclass
 
 FDR_STEP = 0.05
-
+# TODO: how exactly was this calculated previously? Maybe we don't need this step at all?
 
 def _stack(series):
     """Duplicate a per-module series: rows 0..n-1 protective, n..2n-1 risk.
@@ -91,7 +88,7 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
     """
     n_levels = _fdr_levels(fdrcut)
     with open(resultsfile, 'rb') as fh:
-        results = pickle.load(fh)
+        results: fdrrclass = pickle.load(fh)
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(resultsfile)))
 
     fdrBPM, fdrWPM, fdrPATH = results.fdrbpm2, results.fdrwpm2, results.fdrpath2
@@ -122,7 +119,7 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
     # get_interaction_pair loads it (and the geneset it points at) itself.
     if not (ind_bpm.empty and ind_wpm.empty and ind_path.empty):
         with open(bpmindfile, 'rb') as fh:
-            bpm_ind = pickle.load(fh)
+            bpm_ind: bpmindclass = pickle.load(fh)
         pathways = bpm_ind.wpm['pathway']
         path_ids = {name: i for i, name in enumerate(pathways)}
         n_bpm = len(bpm_ind.bpm.index)
@@ -156,8 +153,7 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
 
     # --- redundancy grouping and the pathway map ----------------------------
     (BPM_nosig_noRD, WPM_nosig_noRD, PATH_nosig_noRD,
-     BPM_groups, WPM_groups, PATH_groups) = cbwr.check_BPM_WPM_redundancy(
-        fdrBPM, fdrWPM, fdrPATH, bpmindfile, fdrcut)
+     BPM_groups, WPM_groups, PATH_groups) = cbwr.check_BPM_WPM_redundancy(fdrBPM, fdrWPM, fdrPATH, bpmindfile, fdrcut)
 
     pmap.draw_map(project_dir, fdrcut, resultsfile, BPM_groups, WPM_groups, PATH_groups)
 
@@ -220,8 +216,7 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
                       ascending=[True, True, False]).reset_index(drop=True)
 
     # --- summary sheets -----------------------------------------------------
-    header = ['minfdr'] + [f'fdr{int(round(k * FDR_STEP * 100)):02d}'
-                           for k in range(1, n_levels + 1)]
+    header = ['minfdr'] + [ f'fdr{int(round(k * FDR_STEP * 100)):02d}' for k in range(1, n_levels + 1) ]
 
     # One row per module type with results. PATH is checked on its own; the
     # original gated both the WPM and PATH rows on WPM being non-empty.
@@ -235,7 +230,7 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
     discovery = [[frame[col].min()]
                  + [int((frame[col] <= k * FDR_STEP).sum()) for k in range(1, n_levels + 1)]
                  for _, frame, col, _ in rows]
-    noRD = [[frame[col].min()] + nosig for _, frame, col, nosig in rows]
+    noRD = [ [frame[col].min()] + nosig for _, frame, col, nosig in rows ]
 
     output_discovery_summary = pd.DataFrame(discovery, columns=header, index=index)
     output_noRD_discovery_summary = pd.DataFrame(noRD, columns=header, index=index)

@@ -50,9 +50,8 @@ def mapsnp2gene(pvarFile, geneAnnotation, mappingDistance, option, outfile):
     if (option == 'snplist'):
 
         # Saving SNPlist to pickle file.
-        final = open(outfile, 'wb')
-        pickle.dump(snplist, final, protocol=pickle.HIGHEST_PROTOCOL)
-        final.close()
+        with open(outfile, 'wb') as final:
+            pickle.dump(snplist, final)
 
     # Option chosen to save to matrix.
     elif (option == 'matrix'):
@@ -69,9 +68,8 @@ def mapsnp2gene(pvarFile, geneAnnotation, mappingDistance, option, outfile):
             sgm.loc[row.var_id, row.genes] = True
 
         # Saving snp-gene matrix to pickle file.
-        final = open(outfile, 'wb')
-        pickle.dump(sgm, final, protocol=pickle.HIGHEST_PROTOCOL)
-        final.close()
+        with open(outfile, 'wb') as final:
+            pickle.dump(sgm, final)
 
     else:
         # Output option not recognized.

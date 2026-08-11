@@ -4,8 +4,7 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 
-from classes.bpmindclass import bpmindclass
-
+from classes import snpsetclass, bpmindclass
 
 def bpmind(snpPathwayFile):
     """Exctracts SNP indices for BPM/WPM sets. Saves a BPMind.pkl file with a bpmindclass class with fields:
@@ -22,7 +21,7 @@ def bpmind(snpPathwayFile):
 
     # Reading in data files
     with open(snpPathwayFile, "rb") as file:
-        snp_set = pickle.load(file)
+        snp_set: snpsetclass = pickle.load(file)
 
     # Retrieving pathways list from snp_set
     pathways = snp_set.pathways
@@ -57,19 +56,21 @@ def bpmind(snpPathwayFile):
             d2 = p2 - p1
             ind2 = np.where(d2 == 1)[0].tolist()
             
+            BPMind1.append(ind1)
+            BPMind2.append(ind2)
+            
             ind1size.append(len(ind1))
             ind2size.append(len(ind2))
             
-            BPMind1.append(ind1)
-            BPMind2.append(ind2)
+
 
     # Getting between pathway sizes by multiplying combination available pairs.
     if (len(pathways) > 1):
         size = np.array(ind1size) * np.array(ind2size)
         # Orienting bpm/wpm data and converting to dataframes.
         bpmdata = {
-            'path1names': combnames[:, 0], 'ind1size': ind1size, 'ind1': BPMind1,
-            'path2names': combnames[:, 1], 'ind2size': ind2size, 'ind2': BPMind2,
+            'path1names': combnames[:, 0], 'ind1': BPMind1, 'ind1size': ind1size, 
+            'path2names': combnames[:, 1], 'ind2': BPMind2, 'ind2size': ind2size, 
             'size': size,
             }
     else:

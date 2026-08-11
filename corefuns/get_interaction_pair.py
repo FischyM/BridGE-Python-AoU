@@ -1,14 +1,9 @@
-import os
-import pickle
+import os, pickle
 
 import numpy as np
 import pandas as pd
 
-from classes import bpmindclass as bpmc
-from classes import snpsetclass as snpp
-from classes import SNPdataclass
-from classes import InteractionNetwork
-from classes import genesetdataclass
+from classes import InteractionNetwork, bpmindclass, snpsetclass, genesetclass, SNPclass
 from corefuns.HygeCache import _hyge_single
 
 
@@ -125,30 +120,33 @@ def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathway
     Side effect:
         Writes <project_dir>/results/interaction_list_{bpm,wpm}_<model>_<fdr>.xlsx
     """
-    with open(snp2genefile, 'rb') as fh:
-        snp2gene = pickle.load(fh)
-
-    with open(snp2pathwayfile, 'rb') as fh:
-        snp2path = pickle.load(fh)
-    
-    with open(bpmfile, 'rb') as fh:
-        bpm_ind = pickle.load(fh)
-    
-    with open(snp2path.geneset, 'rb') as fh:
-        geneset = pickle.load(fh)
+    with open(ssmfile, 'rb') as fh:
+        int_network: InteractionNetwork = pickle.load(fh)
         
+    with open(bpmfile, 'rb') as fh:
+        bpm_ind: bpmindclass = pickle.load(fh)
+        
+    with open(snp2pathwayfile, 'rb') as fh:
+        snp2path: snpsetclass = pickle.load(fh)
+        
+    with open(snp2path.geneset, 'rb') as fh:
+        geneset: genesetclass = pickle.load(fh)
+        
+    with open(snp2genefile, 'rb') as fh:
+        snp2gene: pd.DataFrame = pickle.load(fh)
+
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(snp2pathwayfile)))
     
     with open(os.path.join(project_dir, 'intermediate', 'SNPdataAD.pkl'), 'rb') as fh:
-        snpdataAD = pickle.load(fh)
+        snpdataAD: SNPclass = pickle.load(fh)
     
     with open(os.path.join(project_dir, 'intermediate', 'SNPdataAR.pkl'), 'rb') as fh:
-        snpdataAR = pickle.load(fh)
+        snpdataAR: SNPclass = pickle.load(fh)
     
-    with open(ssmfile, 'rb') as fh:
-        int_network = pickle.load(fh)
+
 
     # load ld_file
+    # TODO: this needs to be updated with how I create plink.ld file
     ld_file = os.path.join(project_dir, 'intermediate', 'plink.ld')
     try:
         ld_data = pd.read_csv(ld_file, header=None, index_col=False, sep='\t').to_numpy()

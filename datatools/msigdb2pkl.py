@@ -3,7 +3,7 @@ import pickle
 import numpy as np
 import pandas as pd
 
-from classes.genesetdataclass import genesetclass
+from classes import genesetclass
 
 
 def msigdb2pkl(symbolsFile, entrezFile):

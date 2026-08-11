@@ -7,8 +7,7 @@ import numpy as np
 from scipy.sparse import csr_array, issparse
 from scipy.stats import chi2, norm, rankdata
 
-from classes.Stats import Stats
-from classes.GenstatsOut import GenstatsOut
+from classes import bpmindclass, InteractionNetwork, Stats, GenstatsOut
 np.seterr(divide='ignore', invalid='ignore')
 
 # genstats() computes BPM/WPM/PATH statistics. Can be run parallel.
@@ -792,14 +791,14 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
 def genstats(ssmfile, bpmfile, binary_flag, snpPerms, minPath, n_jobs, n_workers, netDensity=None):
     ### load bpmfile
     with open(bpmfile, 'rb') as pklin:
-        bpm_obj = pickle.load(pklin)
+        bpm_obj: bpmindclass = pickle.load(pklin)
     bpm = bpm_obj.bpm
     wpm = bpm_obj.wpm
     print(f"\tloaded {bpm.shape[0]:,} BPMs and {wpm.shape[0]} WPMs")
 
     ### load interaction network
     with open(ssmfile, 'rb') as pklin:
-        network = pickle.load(pklin)
+        network: InteractionNetwork = pickle.load(pklin)
     p_network = as_sparse(network.protective)
     r_network = as_sparse(network.risk)
 
