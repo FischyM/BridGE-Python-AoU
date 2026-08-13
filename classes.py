@@ -9,29 +9,25 @@ from scipy.sparse import csr_array
 class SNPclass():
     """Class for SNP data, including genotype data and associated metadata.
     
-    
-    data (DataFrame):   genotype data with SNPs as rows and samples as columns
-    varid (Series):     SNP identifiers (e.g., rsIDs or chrom:pos:ref:alt string)
-    chrom (Series):     chromosome identifiers for each SNP
-    pos (Series):       physical positions of each SNP on the chromosome
-    pheno (Series):     phenotype information for each sample
-    fid (Series):       family identifiers for each sample
-    iid (Series):       individual identifiers for each sample
-    sex (Series):       sex information for each sample
+    data (ndarray): genotype data with samples as rows and SNPs as columns
+    varid (Series): SNP identifiers (e.g., rsIDs or chrom:pos:ref:alt string)
+    chrom (Series): chromosome identifiers for each SNP
+    pos (Series):   physical positions of each SNP on the chromosome
+    pheno (Series): phenotype information for each sample
+    iid (Series):   individual identifiers for each sample
+    sex (Series):   sex information for each sample
     """
-    data: DataFrame
+    data: ndarray
     varid: Series
     chrom: Series
     pos: Series
     pheno: Series
-    fid: Series
     iid: Series
     sex: Series
 
 @dataclass
 class genesetclass():
     """Class for gene set data, including gene to pathway mapping and entrez ID lookup.
-    
     
     entrezids (dict):       gene {symbol: entrezID} lookup dictionary
     gpmatrix (DataFrame):   gene pathway binary dataframe
@@ -40,24 +36,33 @@ class genesetclass():
     gpmatrix: DataFrame
 
 @dataclass
+class snpgeneclass():
+    """Class for SNP to gene mapping data.
+    
+    This class stores the mapping of SNPs to genes, along with the distance by which gene 
+    boundaries are expanded for SNP to gene mapping.
+    
+    sgmatrix (DataFrame):   dictionary mapping SNPs to genes
+    mapping_dist (int):     mapping distance in bp to expand gene boundaries by for SNP to gene mapping
+    """
+    sgmatrix: DataFrame
+    mapping_dist: int
+    
+@dataclass
 class snpsetclass():
     """Class for SNP set data, including SNP to pathway mapping and pathway sizes.
     
-    
     pathways (Series):      number of SNPs in each pathway, includes the pathway names as the index
     spmatrix (DataFrame):   snp to pathway mapping DataFrame
-    geneset (str):          Gene-set file location that is a pickle file.
     """
     pathways: Series
     spmatrix: DataFrame
-    geneset: str
 
 @dataclass
 class bpmindclass():
     """BPM and WPM extracted data needed for computing statistics and FDR.
     
     The file is saved as a pickle file called "BPMind.pkl" in the intermediate directory.
-    
     
     bpm (DataFrame): DataFrame that has all BPM associated data 
         path1names: pathway 1 names
@@ -72,7 +77,6 @@ class bpmindclass():
         ind:        SNP indices for each pathway
         indsize:    size of ind
         size:       size of the within pathway module ((indsize * indsize) - indsize) that is nonredundant.
-        
         
     Note: wpm.size results in a symmetric matrix with redundant values (upper triangle == lower triangle). 
     This difference is accounted for in the BPM/WPM density calculations.
@@ -91,7 +95,6 @@ class InteractionNetwork():
     For the max_id matrices, the values indicate which of the three input matrices (RR, RD, DD)
     was the maximum value for each SNP pair (1=RR, 2=DD, 3=RD).
     
-    
     risk (csr_array):                       sparse matrix of risk interaction scores between SNPs
     protective (csr_array):                 sparse matrix of protective interaction scores between SNPs
     risk_max_id (csr_array | None):         optional sparse matrix indicating the indices of the maximum risk interactions
@@ -108,7 +111,6 @@ class Stats():
     
     p-values depends on if the InteractionNetwork is optionally binarized. 
     If binarized, p-values are chi2, otherwise they are ranksum.
-    
     
     bpm_local (ndarray):            p-values for BPMs 
     bpm_local_pv (ndarray):         permuted empirical p-values for BPMs 
@@ -140,7 +142,6 @@ class GenstatsOut():
     
     This class is saved in the intermediate directory as a pickle file called "genstats_<ssmFile>.pkl".
     
-    
     protective_stats (Stats):   statistics for protective interactions
     risk_stats (Stats):         statistics for risk interactions
     """
@@ -165,7 +166,6 @@ class fdrrclass():
     
     TODO: no matter the origin of the p-values, they are called ranksum here. 
     This should be fixed to avoid confusion.
-    
     
     bpm_pv (DataFrame): permuted empirical p-values for BPMs
     wpm_pv (DataFrame): permuted empirical p-values for WPMs
@@ -192,3 +192,59 @@ class fdrrclass():
     fdrwpm2: DataFrame
     fdrpath1: DataFrame
     fdrpath2: DataFrame
+
+
+import threading, time, os
+import psutil
+
+class ResourceMonitor:
+    """
+    Usage:
+    from classes import ResourceMonitor
+    with ResourceMonitor(interval=0.2):
+        mapsnp2gene(...)
+    """
+    def __init__(self, interval=0.2):
+        self.interval = interval
+        self.proc = psutil.Process(os.getpid())
+        self._stop = threading.Event()
+        self.peak_rss = 0
+        self.peak_cpu = 0.0
+        self.baseline_rss = 0
+
+    def _procs(self):
+        try:
+            return [self.proc] + self.proc.children(recursive=True)
+        except psutil.NoSuchProcess:
+            return [self.proc]
+
+    def _sample(self):
+        rss = cpu = 0
+        for p in self._procs():
+            try:
+                rss += p.memory_info().rss
+                cpu += p.cpu_percent()  # % of one core; sums across processes
+            except psutil.NoSuchProcess:
+                pass
+        return rss, cpu
+
+    def _poll(self):
+        self._sample()  # prime cpu_percent (first call is always 0)
+        while not self._stop.wait(self.interval):
+            rss, cpu = self._sample()
+            self.peak_rss = max(self.peak_rss, rss)
+            self.peak_cpu = max(self.peak_cpu, cpu)
+
+    def __enter__(self):
+        self.baseline_rss, _ = self._sample()
+        self.peak_rss = self.baseline_rss
+        self._thread = threading.Thread(target=self._poll, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join()
+        print(f"Peak RAM increase: {(self.peak_rss - self.baseline_rss) / 1e9:.2f} GB")
+        print(f"Peak CPU usage: {self.peak_cpu:.0f}% (of a single core; "
+              f"{psutil.cpu_count()} cores available)")
