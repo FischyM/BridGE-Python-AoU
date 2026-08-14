@@ -1,12 +1,13 @@
+import pickle, sys
+
 import numpy as np
 import pandas as pd
-import pickle
-import sys
-sys.path.append('classes')
-import InteractionNetwork
+
+from classes import InteractionNetwork
+
 
 # Pyhthon script for converting CSSI output to Python interaction networks.
-#inputs:
+# inputs:
 #    cassifile: CASSI output file
 #    gitype: genetic interaction type
 #            'lin': logistic regression test
@@ -25,10 +26,10 @@ gittype = sys.argv[3]
 outputfile = sys.argv[4]
 
 # load CASSI interaction file
-ssm_cassi = pd.read_csv(cassifile,sep='\s+')
+ssm_cassi = pd.read_csv(cassifile, sep=r'\s+')
 
 # load bim file
-bim = pd.read_csv(plinkbimfile,sep='\s+',engine='python',header=None)
+bim = pd.read_csv(plinkbimfile, sep=r'\s+', engine='python', header=None)
 # number of SNPs
 p = bim.shape[0]
 
@@ -112,12 +113,8 @@ elif gittype == 'wz':
 
 
 # save to file
-ssm_risk = np.maximum(ssm_risk,ssm_risk.T)
-ssm_pro = np.maximum(ssm_pro,ssm_pro.T)
-network = InteractionNetwork.InteractionNetwork(ssm_risk,ssm_pro,None,None)
-final = open(outputfile, 'wb')
-pickle.dump(network, final)
-final.close()
-
-
-
+ssm_risk = np.maximum(ssm_risk, ssm_risk.T)
+ssm_pro = np.maximum(ssm_pro, ssm_pro.T)
+network = InteractionNetwork.InteractionNetwork(ssm_risk, ssm_pro, None, None)
+with open(outputfile, 'wb') as final:
+	pickle.dump(network, final)

@@ -1,10 +1,9 @@
+import copy, pickle, sys
+
 import numpy as np
 import pandas as pd
-import pickle
-from classes.snpsetclass import snpsetclass
-import sys
-import copy
 
+from classes import snpsetclass
 
 
 def withinclassrand(seed, plinkCluster, datafile):

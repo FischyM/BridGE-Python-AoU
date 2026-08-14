@@ -17,7 +17,8 @@ from scipy.stats import hypergeom
 # logpv - negative log10(p-value)
 # pv - p-value
 
-@functools.lru_cache(maxsize=None)  # TODO: let it grow to max size? theoretically there will be a ceiling...?
+# @functools.lru_cache(maxsize=2_000_000)
+@functools.cache
 def _hyge_single(n, d, g, x):
     """Single-value hypergeom survival function, cached per (n, d, g, x)."""
     return hypergeom.sf(x - 1, n, g, d)
@@ -53,9 +54,3 @@ class HygeCache:
         args = [(self.sample_size, d, gc, xc) for gc, xc in zip(g_chunks, x_chunks)]
         results = pool.map(_hyge_chunk, args)
         return np.concatenate(results)
-
-    @staticmethod
-    def cache_info():
-        """Inspect hit/miss rate to decide if caching is actually helping (call inside
-        a worker, e.g. via pool.apply, since each process has its own cache)."""
-        return _hyge_single.cache_info()
