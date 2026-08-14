@@ -54,8 +54,9 @@ def plink2pkl(pgen_file, pvar_file, psam_file, output_file):
         pgr.read_range(0, m, G)
         
     G = G.T  # samples x variants
+    # TODO: should we convert missing to zero here?
     # code missing values as NaN for proper handling, which means int8 -> float64
-    # G = G.T.astype(np.float64)
+    # G = G.T.astype(np.float64)  
     # G[G == -9] = np.nan
     
     print(f"Genotype matrix composition: {np.unique(G, return_counts=True)}")
@@ -130,14 +131,14 @@ def msigdb2pkl(symbols_file, entrez_file, output_file):
         pickle.dump(geneset, f)
 
 
-def mapsnp2gene(pvar_file, gene_annotation_file, mapping_distance, snp_gene_pkl):
+def mapsnp2gene(pvar_file, gene_annotation_file, mapping_distance, output_file):
     """Creates snp to gene matrix in the DataFrame format and saves it to a pickle file.
 
     Args:
         pvar_file (str): path to Plink variant file in .pvar format.
         gene_annotation (str): path to gene annotation file.
         mapping_distance (int): snp to gene mapping distance.
-        snp_gene_pkl (str): file name for saving the results.
+        output_file (str): file name for saving the results.
     """
     
     # Creating SNP dataframe from snp annotation file.
@@ -193,21 +194,21 @@ def mapsnp2gene(pvar_file, gene_annotation_file, mapping_distance, snp_gene_pkl)
     # get unique SNP IDs and gene names
     snplist = pd.Series(all_ids).drop_duplicates().reset_index(drop=True)
     genelist = pd.Series(all_genes).drop_duplicates().reset_index(drop=True)
-
+    
     # use sparse array to quickly create snp to gene mapping matrix
     snp_idx = {v: i for i, v in enumerate(snplist)}
     gene_idx = {v: i for i, v in enumerate(genelist)}
     rows = pd.Series(all_ids).map(snp_idx).to_numpy()
     cols = pd.Series(all_genes).map(gene_idx).to_numpy()
-    data = np.ones(len(all_ids), dtype=bool)
-    sparse_array = coo_array((data, (rows, cols)), shape=(len(snplist), len(genelist)), dtype=bool).tocsr()
-    snp_gene_df = pd.DataFrame.sparse.from_spmatrix(sparse_array, index=snplist, columns=genelist)
+    data = np.ones(len(all_ids))
+    sparse_array = coo_array((data, (rows, cols)), shape=(len(snplist), len(genelist)))
+    snp_gene_df = pd.DataFrame(sparse_array.toarray(), index=snplist, columns=genelist, dtype=bool)
 
     # Saving snp-gene matrix to pickle file.
     snp_gene_class = snpgeneclass(sgmatrix=snp_gene_df, mapping_dist=mapping_distance)
-    with open(snp_gene_pkl, 'wb') as f:
+    with open(output_file, 'wb') as f:
         pickle.dump(snp_gene_class, f)
-
+    
 
 def snppathway(snp_data_pkl, snp_gene_pkl, geneset_pkl, min_path, max_path, output_file):
     """Creates a snp-to-pathway mapping.
@@ -226,17 +227,19 @@ def snppathway(snp_data_pkl, snp_gene_pkl, geneset_pkl, min_path, max_path, outp
         snp_data: SNPclass = pickle.load(f)
     with open(snp_gene_pkl, "rb") as f:
         snp_gene_mapping: snpgeneclass = pickle.load(f)
-        snp_gene_df = snp_gene_mapping.sgmatrix  # snps are rows, genes are columns
+        snp_gene_df = snp_gene_mapping.sgmatrix.astype(np.int64)
+        # snps are rows, genes are columns, bool values converted to int64 for matrix multiplication
     with open(geneset_pkl, "rb") as f:
         gene_pathway_mapping: genesetclass = pickle.load(f)
-        gene_pathway_df = gene_pathway_mapping.gpmatrix  # genes are rows, pathways are columns
+        gene_pathway_df = gene_pathway_mapping.gpmatrix.astype(np.int64)
+        # genes are rows, pathways are columns, bool values converted to int64 for matrix multiplication
 
     # find the snps in SNPdata (plink data) that are also in the snp-gene matrix
     # since the snp-gene matrix was created from the plink data, this is simply a sanity check that runs fast
     tmp_ids = np.intersect1d(snp_data.varid, snp_gene_df.index)
     ind_ids = snp_gene_df.index.isin(tmp_ids)
     tmp_sgm = snp_gene_df.loc[ind_ids, :]
-    
+
     # keep only pathways with total genes less than upper limit and more than lower limit
     ind = (np.sum(gene_pathway_df, axis=0) <= max_path) & (np.sum(gene_pathway_df, axis=0) >= min_path)
     tmp_gpm = gene_pathway_df.loc[:, ind]
@@ -252,8 +255,8 @@ def snppathway(snp_data_pkl, snp_gene_pkl, geneset_pkl, min_path, max_path, outp
     tmp_sgp = sg_sparse.dot(gp_sparse).toarray()
 
     # after matrix multiplication (dot product) there will be values greater than 1
-    # set data type to bool and then back to int
-    tmp_sgp = tmp_sgp.astype(bool).astype(int)
+    # set data type to bool and then back to int????
+    # tmp_sgp = tmp_sgp.astype(int)
     tmp_sgp_df = pd.DataFrame(tmp_sgp,
                                 index=pd.Series(tmp2_sgm.index, name='varid'),
                                 columns=pd.Series(tmp2_gpm.columns, name='pathway'))
@@ -284,12 +287,7 @@ def snppathway(snp_data_pkl, snp_gene_pkl, geneset_pkl, min_path, max_path, outp
 
 
 def bpmind(snp_pathway_pkl, output_file):
-    """Exctracts SNP indices for BPM/WPM sets. Saves a BPMind.pkl file with a bpmindclass class.
-    
-    Args:
-        snp_pathway_pkl (str): Path to the SNP to pathway mapping file in the Pickle format.
-        output_file (str): Path to the output pickle file containing the BPM/WPM indices.
-    """
+    """Exctracts SNP indices for BPM/WPM sets. Saves a BPMind.pkl file with a bpmindclass class."""
 
     # Reading in data files
     with open(snp_pathway_pkl, "rb") as f:
