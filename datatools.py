@@ -210,7 +210,7 @@ def mapsnp2gene(pvar_file, gene_annotation_file, mapping_distance, output_file):
         pickle.dump(snp_gene_class, f)
     
 
-def snppathway(snp_data_pkl, snp_gene_pkl, geneset_pkl, min_path, max_path, output_file):
+def snppathway(project_dir, min_path, max_path, output_file):
     """Creates a snp-to-pathway mapping.
 
     Args:
@@ -223,13 +223,15 @@ def snppathway(snp_data_pkl, snp_gene_pkl, geneset_pkl, min_path, max_path, outp
     """
     
     # Reading in data files
-    with open(snp_data_pkl, "rb") as f:
+    with open(f"{project_dir}/intermediate/snp_data.pkl", "rb") as f:
         snp_data: SNPclass = pickle.load(f)
-    with open(snp_gene_pkl, "rb") as f:
+        
+    with open(f"{project_dir}/intermediate/snp_gene_mapping.pkl", "rb") as f:
         snp_gene_mapping: snpgeneclass = pickle.load(f)
         snp_gene_df = snp_gene_mapping.sgmatrix.astype(np.int64)
         # snps are rows, genes are columns, bool values converted to int64 for matrix multiplication
-    with open(geneset_pkl, "rb") as f:
+        
+    with open(f"{project_dir}/intermediate/gene_pathway_mapping.pkl", "rb") as f:
         gene_pathway_mapping: genesetclass = pickle.load(f)
         gene_pathway_df = gene_pathway_mapping.gpmatrix.astype(np.int64)
         # genes are rows, pathways are columns, bool values converted to int64 for matrix multiplication
@@ -286,11 +288,11 @@ def snppathway(snp_data_pkl, snp_gene_pkl, geneset_pkl, min_path, max_path, outp
         pickle.dump(snp_set, f)
 
 
-def bpmind(snp_pathway_pkl, output_file):
+def bpmind(project_dir, output_file):
     """Exctracts SNP indices for BPM/WPM sets. Saves a BPMind.pkl file with a bpmindclass class."""
 
     # Reading in data files
-    with open(snp_pathway_pkl, "rb") as f:
+    with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
         snp_set: snpsetclass = pickle.load(f)
 
     # Retrieving pathways list from snp_set

@@ -8,105 +8,89 @@ from corefuns import genstats_perm as gs
 from corefuns import matrix_operations_par as ci
 import datatools
 
-VALID_MODELS = {'RR', 'RD', 'DD', 'combined'}
+
+MODULE_CHOICES = ('DataProcess', 'ComputeInteraction', 'ComputeStats', 'ComputeFDR', 'Summarize')
+VALID_MODELS = ('RR', 'RD', 'DD', 'combined')
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description='BridGE pipeline', allow_abbrev=False)
-    p.add_argument('--job', default='')
+    p = argparse.ArgumentParser(description='BridGE pipeline', allow_abbrev=False, suggest_on_error=True)
+    
+    # required arguments
+    p.add_argument('--projectDir', dest='project_dir', required=True)
+    p.add_argument('--module', dest='module', choices=MODULE_CHOICES, required=True)
+    
+    # common arguments
+    p.add_argument('--model', choices=VALID_MODELS, default='combined')
+    p.add_argument('--nJobs', dest='n_jobs', type=int, default=10)
+    p.add_argument('--nWorker', dest='n_workers', type=int, default=None)  # None means use all available cores
+    p.add_argument('--minPath', type=int, default=10)  # TODO: is this needed for compute stats? How can this permeate through?
+    p.add_argument('--i', type=int, default=-1)
+    p.add_argument('--R', dest='r', type=int, default=-1)
+    p.add_argument('--densityCutoff', dest='densitycutoff', type=float, default=None)
+    p.add_argument('--ssmfile', default=None)
+    
+    # data processing arguments
     p.add_argument('--plinkFile', dest='plinkfile', default='')
     p.add_argument('--genesets', default='c2.cp.v7.1')
     p.add_argument('--geneAnnotation', dest='gene_annotation', default='glist-hg38')
     p.add_argument('--mappingDistance', type=int, default=50000)
-    p.add_argument('--minPath', type=int, default=10)
     p.add_argument('--maxPath', type=int, default=300)
-    p.add_argument('--model', default=None)
-    p.add_argument('--nJobs', dest='n_jobs', type=int, default=10)
-    p.add_argument('--nWorker', dest='n_workers', default=None)  # None means use all available cores
-    p.add_argument('--samplePerms', dest='sample_perms', type=int, default=10)
-    p.add_argument('--binaryNetwork', type=int, default=0)
-    p.add_argument('--snpPerms', type=int, default=10000)
+    
+    # compute interaction arguments
+    p.add_argument('--alpha1', type=float, default=0.05)
+    p.add_argument('--alpha2', type=float, default=0.05)
+    
+    # compute stats arguments
+    p.add_argument('--binaryNetwork', action='store_true')
+    p.add_argument('--snpPerms', dest='snp_perms', type=int, default=10000)
+    
+    # compute fdr arguments
+    p.add_argument('--samplePerms', dest='sample_perms', type=int, default=10)  # this is just R, so maybe it isn't needed to be a separate argument? but it is for now
     p.add_argument('--pvalueCutoff', dest='pval_cutoff', type=float, default=0.05)
-    p.add_argument('--i', type=int, default=-1)
+    
+    # summarize arguments
     p.add_argument('--fdrcut', type=float, default=0.25)
-    p.add_argument('--snpPathFile', dest='snppathwayfile', default='snp_pathway_min10_max300.pkl')
-    p.add_argument('--projectDir', dest='project_dir', default='data')
-    p.add_argument('--densityCutoff', dest='densitycutoff', type=float, default=None)
-    p.add_argument('--ssmfile', default=None)
-    p.add_argument('--R', dest='r', type=int, default=-1)
-
-    args = p.parse_args()
-    # alpha1/alpha2 were hardcoded constants in the original; no CLI flag
-    # ever set them, so keep them fixed here.
-    args.alpha1 = 0.05
-    args.alpha2 = 0.05
-    args.binaryNetwork = bool(args.binaryNetwork)
-    return args
+    p.add_argument('--snpPathFile', dest='snppathwayfile', default='snp_pathway_min10_max300.pkl') # TODO: may not need this. save as an unambigous file with min and max saved to the dataclass
+    
+    return p.parse_args()
 
 def require_exists(*filepaths):
     for filepath in filepaths:
         if not path.exists(filepath):
             sys.exit(f'{filepath} not found')
 
-def _require_model(args, allow_ssmfile=False):
-    if args.model in VALID_MODELS:
-        return
-    if allow_ssmfile and args.ssmfile is not None:
-        return
-    sys.exit('wrong model')
-
-def _snp_data_files(args):
-    snp_data_ad = f"{args.project_dir}/intermediate/SNPdataAD.pkl"
-    snp_data_ar = f"{args.project_dir}/intermediate/SNPdataAR.pkl"
-    require_exists(snp_data_ad, snp_data_ar)
-    return snp_data_ad, snp_data_ar
-
-def _ssm_filename(project_dir, model, r_index):
-    return f"{project_dir}/intermediate/ssM_mhygessi_{model}_R{r_index}.pkl"
-
-
-# Module Functions
-
 def run_data_process(args):
     print('data processing...')
-    sys.stdout.flush()
 
-    if not args.plinkfile:
-        sys.exit('plinkFile not provided')
+    pgen_file = f"{args.project_dir}/raw/{args.plinkfile}.pgen"
+    pvar_file = f"{args.project_dir}/raw/{args.plinkfile}.pvar"
+    psam_file = f"{args.project_dir}/raw/{args.plinkfile}.psam"
+    require_exists(pgen_file, pvar_file, psam_file)
+    snp_data_pkl = f"{args.project_dir}/intermediate/snp_data.pkl"
+    datatools.plink2pkl(pgen_file, pvar_file, psam_file, snp_data_pkl)
 
-    # TODO: change these to use both pgen and bed file types from plink2
-    rawfile = f"{args.project_dir}/intermediate/{args.plinkfile}.raw"
-    bimfile = f"{args.project_dir}/intermediate/{args.plinkfile}.bim"
-    famfile = f"{args.project_dir}/intermediate/{args.plinkfile}.fam"
-    require_exists(rawfile, bimfile, famfile)
-
-    finalfile = f"{args.project_dir}/intermediate/{args.plinkfile}.pkl"
-    datatools.plink2pkl(rawfile, bimfile, famfile, finalfile)
-    # TODO: read in pgen file directly instead of converting to raw first
-
-    datatools.bindataa(args.project_dir, finalfile, 'r')
-    datatools.bindataa(args.project_dir, finalfile, 'd')
-    # TODO: remove these and simply load the original data and change to r or d as needed.
-
-    symbolsfile = f"{args.project_dir}/raw/{args.genesets}.symbols.gmt"
-    entrezfile = f"{args.project_dir}/raw/{args.genesets}.entrez.gmt"
-    require_exists(symbolsfile, entrezfile)
-    datatools.msigdb2pkl(symbolsfile, entrezfile)
+    symbols_file = f"{args.project_dir}/raw/{args.genesets}.symbols.gmt"
+    entrez_file = f"{args.project_dir}/raw/{args.genesets}.entrez.gmt"
+    require_exists(symbols_file, entrez_file)
+    gene_pathway_pkl = f"{args.project_dir}/intermediate/gene_pathway_mapping.pkl"
+    datatools.msigdb2pkl(symbols_file, entrez_file, gene_pathway_pkl)
     # TODO: reduce gene set based on Jaccard similarity?
 
     gene_annotation_file = f"{args.project_dir}/raw/{args.gene_annotation}"
     require_exists(gene_annotation_file)
-    sgmfile = f"{args.project_dir}/intermediate/snpgenemapping_{args.mappingDistance // 1000}kb.pkl"
-    datatools.mapsnp2gene(bimfile, gene_annotation_file, args.mappingDistance, 'matrix', sgmfile)
-    # TODO: shouldn't this output also be a dataclass?
+    snp_gene_pkl = f"{args.project_dir}/intermediate/snp_gene_mapping.pkl"
+    datatools.mapsnp2gene(pvar_file, gene_annotation_file, args.mappingDistance, snp_gene_pkl)
 
-    geneset_pkl = f"{args.project_dir}/intermediate/{args.genesets}.pkl"
-    outfile = datatools.snppathway(finalfile, sgmfile, geneset_pkl, args.minPath, args.maxPath)
-    datatools.bpmind(outfile)
+    snp_pathway_pkl = f"{args.project_dir}/intermediate/snp_pathway_mapping.pkl"
+    datatools.snppathway(args.project_dir, args.minPath, args.maxPath, snp_pathway_pkl)
+    
+    pathway_inds_pkl = f"{args.project_dir}/intermediate/pathway_indices.pkl"
+    datatools.bpmind(args.project_dir, pathway_inds_pkl)
 
 def run_compute_interaction(args):
-    _require_model(args)
-    _snp_data_files(args)
+    # _require_model(args)
+    # _snp_data_files(args)
 
     pool = mp.Pool(processes=args.n_workers)
     
@@ -122,11 +106,11 @@ def run_compute_interaction(args):
     pool.join()
 
 def run_compute_stats(args):
-    _require_model(args, allow_ssmfile=True)
+    # _require_model(args, allow_ssmfile=True)
 
-    bpmfile = f"{args.project_dir}/intermediate/BPMind.pkl"
+    bpmfile = f"{args.project_dir}/intermediate/BPM_WPM_indices.pkl"
     require_exists(bpmfile)
-    _snp_data_files(args)
+    # _snp_data_files(args)
 
     if args.n_jobs < 2:
         args.n_jobs = 2
@@ -135,19 +119,19 @@ def run_compute_stats(args):
     if args.ssmfile is not None:
         ssmfile = f"{args.project_dir}/intermediate/{args.ssmfile}"
         print(f'Computing statistics on {args.ssmfile}')
-        gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snpPerms,
+        gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snp_perms,
                     args.minPath, args.n_jobs, args.n_workers, args.densitycutoff)
     else:
         indices = range(args.r + 1) if args.r >= 0 else [args.i]
         for i in indices:
-            ssmfile = _ssm_filename(args.project_dir, args.model, i)
+            ssmfile = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R{i}.pkl"
             print(f'Computing statistics on {args.model}_R{i}')
-            gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snpPerms,
+            gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snp_perms,
                         args.minPath, args.n_jobs, args.n_workers, args.densitycutoff)
 
 def run_compute_fdr(args):
     if args.ssmfile is None:
-        ssmfile = _ssm_filename(args.project_dir, args.model, 0)
+        ssmfile = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R0.pkl"
     else:
         ssmfile = f"{args.project_dir}/intermediate/{args.ssmfile}"
     require_exists(ssmfile)
@@ -156,30 +140,30 @@ def run_compute_fdr(args):
     fdr.fdrsampleperm(ssmfile, args.pval_cutoff, args.sample_perms)
 
 def run_summarize(args):
-    bpmfile = f"{args.project_dir}/intermediate/BPMind.pkl"
+    bpmfile = f"{args.project_dir}/intermediate/BPM_WPM_indices.pkl"
     require_exists(bpmfile)
 
     snppathwayfile = f"{args.project_dir}/intermediate/{args.snppathwayfile}"
     require_exists(snppathwayfile)
 
+    # TODO: this should be made into a dataclass that is unambiguous to load
     snpgenemappingfile = f"{args.project_dir}/intermediate/snpgenemapping_{args.mappingDistance // 1000}kb.pkl"
     require_exists(snpgenemappingfile)
 
     if args.ssmfile is None:
         imported = False
+        ssmfile = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R0.pkl"
         resultsfile = f"{args.project_dir}/intermediate/results_ssM_mhygessi_{args.model}_R0.pkl"
-        ssmfile = _ssm_filename(args.project_dir, args.model, 0)
     else:
         imported = True
-        resultsfile = f"{args.project_dir}/intermediate/results_{args.ssmfile}"
         ssmfile = f"{args.project_dir}/intermediate/{args.ssmfile}"
-
+        resultsfile = f"{args.project_dir}/intermediate/results_{args.ssmfile}"
     require_exists(ssmfile, resultsfile)
 
     cl.collectresults(resultsfile, args.fdrcut, ssmfile, bpmfile,
                        snppathwayfile, snpgenemappingfile, imported, args.densitycutoff)
 
-JOBS = {
+MODULES_RUN = {
     'DataProcess': run_data_process,
     'ComputeInteraction': run_compute_interaction,
     'ComputeStats': run_compute_stats,
@@ -189,10 +173,10 @@ JOBS = {
 
 def main():
     args = parse_args()
-    job_fn = JOBS.get(args.job)
-    if job_fn is None:
-        sys.exit(f'unknown job: {args.job!r}')
-    job_fn(args)
+    module_fn = MODULES_RUN.get(args.module)
+    if module_fn is None:
+        sys.exit(f'unknown module: {args.module!r}')
+    module_fn(args)
 
 if __name__ == '__main__':
     main()
