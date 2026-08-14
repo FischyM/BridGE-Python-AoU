@@ -89,9 +89,9 @@ def run_data_process(args):
     datatools.bpmind(args.project_dir, pathway_inds_pkl)
 
 def run_compute_interaction(args):
-    # _require_model(args)
-    # _snp_data_files(args)
 
+    # TODO: add in memory tracking? See test_code-small_snps.ipynb for example
+    
     pool = mp.Pool(processes=args.n_workers)
     
     indices = range(args.r + 1) if args.r >= 0 else [args.i]

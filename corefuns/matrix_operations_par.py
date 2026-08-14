@@ -1,15 +1,13 @@
-import math
-import sys
-import pickle
+import math, pickle
 from datetime import datetime
 from os import path
 
 import numpy as np
-from scipy.sparse import coo_array, csr_array
+from scipy.sparse import coo_array
 
 from corefuns import HygeCache as hc
 from corefuns import withinclassrand as wrand
-from classes import InteractionNetwork
+from classes import SNPclass, InteractionNetwork
 
 
 # matrix_operations_par computes the interaction network. The functions to call are run() and combine()
@@ -65,7 +63,7 @@ def helper_score_from_counts(cache, g11, x11, g10, x10, g01, x01, g00, x00, alph
     log_out[q_min == 0] = 0
     log_out[~np.isfinite(log_out)] = 0
     log_out[log_out < 0] = 0
-    # NOTE: original also had `log_out[p11 == 0] = 0`, but p11 is always >= eps > 0 here
+    # original also had `log_out[p11 == 0] = 0`, but p11 is always >= eps > 0 here
     # (it was dead code in the original too) so it's omitted.
     return log_out
 
@@ -82,22 +80,24 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
         R (_type_): _description_
     """
     
-    print(f'Computing SNP-SNP interactions: R={R} model={model}')
+    print(f'Computing SNP-SNP interactions: R={R} model={model}', flush=True)
     output_name = f"{project_dir}/intermediate/ssM_mhygessi_{model}_R{R}.pkl"
     cluster_file = f"{project_dir}/intermediate/PlinkFile.cluster2"
 
-    # loading and reading SNP data - skipped if caller already loaded these (e.g. looping over R)
-    with open(f"{project_dir}/intermediate/SNPdataAD.pkl", "rb") as pkl_d:
-        snpdata_d = pickle.load(pkl_d)
-    with open(f"{project_dir}/intermediate/SNPdataAR.pkl", "rb") as pkl_r:
-        snpdata_r = pickle.load(pkl_r)
-
-    pheno = snpdata_r.pheno
-    dataR = snpdata_r.data
-    dataD = snpdata_d.data
-
+    # loading and reading SNP data
+    # read SNP data and convert to dominant and recessive coding
+    with open(f"{project_dir}/intermediate/snp_data.pkl", "rb") as f:
+        snp_data: SNPclass = pickle.load(f)
+    pheno = snp_data.pheno
+    G  = snp_data.data  # assuming there are no missing values in the genotype data (i.e., no -9s)
+    
+    # convert genotype data to dominant and recessive coding with a simple mapping
+    dom_map = np.array([0, 1, 1])  # dominant:  0->0, 1->1, 2->1 
+    rec_map = np.array([0, 0, 1])  # recessive: 0->0, 1->0, 2->1
+    dataD = dom_map[G]
+    dataR = rec_map[G]
+        
     symmetric_flag = (model == 'RR' or model == 'DD')
-
     if model == 'RR':
         datai = dataR
         dataj = dataR
@@ -112,12 +112,12 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
     ## shuffle phenotypes if R != 0
     if R > 0:
         if not path.exists(cluster_file):
-            # single deterministic permutation per R, instead of discarding R-1 throwaway
-            # permutations from a shared RNG stream.
+            # single deterministic permutation per R
             rng = np.random.default_rng(66754 * R)
             permuted_idx = rng.permutation(population_size)
             pheno = pheno[permuted_idx]
         else:
+            # TODO: this will fail and needs to be fixed if we ever want to run R > 0 with a cluster file
             pheno = wrand.withinclassrand(R, cluster_file, f"{project_dir}/intermediate/SNPdataAD.pkl")
 
     case_size = int(np.count_nonzero(pheno))
@@ -147,19 +147,15 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
             else:
                 idx.append(idx[i] + share)
 
-    
     results = []
     for i in range(n_jobs):
         t1 = datetime.now()
-        
         i1 = idx[i]
         i2 = idx[i + 1]
+        print(f"    job split {i+1}/{n_jobs}: i1={i1}, i2={i2}", flush=True, end="")
+        
         sx = np.ascontiguousarray(sx_full[:, i1:i2], dtype=np.float64)
         s = sy_full.shape[1]
-        
-        print(f"job split {i+1}/{n_jobs}: i1 = {i1}, i2 = {i2}")
-        sys.stdout.flush()
-        
         tempx = sx * pheno[:, None]
         sx_totals = sx.sum(axis=0)               # (b,)
         casex_totals = tempx.sum(axis=0)         # (b,)
@@ -182,7 +178,6 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
             out_cols = sel[1]
 
         # cache = hc.HygeCache(population_size, case_size, control_size)
-
         g11 = sx.T @ sy_full      # (b, s) - matmul #1
         x11 = tempx.T @ sy_full   # (b, s) - matmul #2
         
@@ -224,7 +219,7 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
         prot_vals = prot_score[nz_p]
         
         results.append((risk_rows, risk_cols, risk_vals, prot_rows, prot_cols, prot_vals))
-        print(f"\t DONE - {datetime.now() - t1}")
+        print(f" - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
     risk_rows = np.concatenate([ r[0] for r in results ])
     risk_cols = np.concatenate([ r[1] for r in results ])

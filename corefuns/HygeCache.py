@@ -17,7 +17,7 @@ from scipy.stats import hypergeom
 # logpv - negative log10(p-value)
 # pv - p-value
 
-@functools.lru_cache(maxsize=2_000_000)  # TODO: let it grow to max size? theoretically there will be a ceiling...?
+@functools.lru_cache(maxsize=None)  # TODO: let it grow to max size? theoretically there will be a ceiling...?
 def _hyge_single(n, d, g, x):
     """Single-value hypergeom survival function, cached per (n, d, g, x)."""
     return hypergeom.sf(x - 1, n, g, d)
