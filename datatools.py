@@ -283,7 +283,7 @@ def snppathway(project_dir, min_path, max_path, output_file):
 
     # Save data to pickle file.
     pathways = tmp_sgp_df.sum(axis=0)
-    snp_set = snpsetclass(pathways=pathways, spmatrix=tmp_sgp_df)
+    snp_set = snpsetclass(pathways=pathways, spmatrix=tmp_sgp_df, min_path=min_path, max_path=max_path)
     with open(output_file, 'wb') as f:
         pickle.dump(snp_set, f)
 

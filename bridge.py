@@ -87,6 +87,8 @@ def run_data_process(args):
     
     pathway_inds_pkl = f"{args.project_dir}/intermediate/pathway_indices.pkl"
     datatools.bpmind(args.project_dir, pathway_inds_pkl)
+    # TODO: add in min_path here to remove pathways that are too small (after removing SNPs in both BPM pathways)
+    # that are thrown out anyways in Compute Stats
 
 def run_compute_interaction(args):
 
@@ -106,11 +108,9 @@ def run_compute_interaction(args):
     pool.join()
 
 def run_compute_stats(args):
-    # _require_model(args, allow_ssmfile=True)
 
-    bpmfile = f"{args.project_dir}/intermediate/BPM_WPM_indices.pkl"
+    bpmfile = f"{args.project_dir}/intermediate/pathway_indices.pkl"
     require_exists(bpmfile)
-    # _snp_data_files(args)
 
     if args.n_jobs < 2:
         args.n_jobs = 2

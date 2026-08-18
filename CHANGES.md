@@ -17,7 +17,7 @@ If extended to 1 real network and 20 random networks (using the test data provid
 ## Python packages and environment
 
 - all packages were downloaded to their latest version for python 3.12
-- use polars for dataframe operations instead of pandas TODO: use pip install Pgenlib
+- TODO: use polars for dataframe operations instead of pandas
 
 This appears to be what is needed for the python version of BridGE
 
@@ -30,12 +30,11 @@ however, I would add the following:
 
 ```bash
 conda create -name bridge-aou -c conda-forge python=3.12 matplotlib networkx numpy pandas scipy seaborn cython jupyterlab ipython scikit-learn polars bioconda::pgenlib openpyxl
-pip install polars-bio  # might not be needed TODO:
+pip install memory_profiler  # for tracking RAM usage
 conda env export > updated-environment.yml
 # conda env create -f updated-environment.yml
+# TODO: remake the environment with just the essential packages
 ```
-
-TODO: Then, find a consensus between what the updated BridGE environment needs and my PGI environment
 
 ## Plink
 
@@ -107,67 +106,60 @@ Since AoU has diverse ancestry samples, we fill in any missing variant values (w
 ## Classes
 
 - merge all separate classes into one python file
+- TODO: rename classes to be more informative
 
 ## DataProcess using Datatools
 
-- merge all separate files into one python file? TODO:
+- merge all separate files into one python file
 - plink2pkl.py
 
   - This implementation's result matches the older version.
   - Changed to use pgen file format with --export A option in plink2.
-  - Will need to change to loading with pgenlib to make it cleaner and so that I don't have to save a large genotype file as a raw text file. TODO:
-  - sparseness of the genotype file should be assessed to see whether or not it would be worth saveing as a sparse array. TODO:
+  - Change to loading with pgenlib to make it cleaner and so that I don't have to save a large genotype file as a raw text file
+  - sparseness of the genotype file is assessed to see whether or not it would be worth saveing as a sparse array
 - bindataa.py
-
   - This implementation's result matches the older version.
-  - redundantly saves SNPdata class. Instead, run the code in this file whenever a dominant or recessive data type is needed. TODO:
+  - redundantly saves SNPdata class. Instead, run the code in this file whenever a dominant or recessive data type is needed.
 - bpmind.py
-
   - This implementation's result matches the older version.
   - spmatrix was refactored so that there are no values larger than 1, these checks aren't needed anymore
-  - wpmdata size does not divide by two like you would for an n choose k problem where k=2. This may be an error or it could be accounted for later on. This will need to be confirmed. TODO:
+  - wpmdata size does not divide by two like you would for an n choose k problem where k=2, however, this is accounted for later on.
+  - TODO: use min_path to remove pathways that are too small that would have been removed anyways in ComputeStats.
 - imputesnp.py
-
   - no longer needed as imputation should be done outside of BridGE, as detailed in my AoU repo. This is to account for the fact that the All of Us data has a diverse ancestry and basic imputation would only work for samples of the same ancestry.
 - mapsnp2gene.py
-
   - This implementation's result matches the older version.
-  - adjustments for pgen file and variant ids is renamed since we can't use rsIDs for whole genome SNPs. This change needs to be propagated throughout the code and classes. TODO:
+  - adjustments for pgen file and variant ids is renamed since we can't use rsIDs for whole genome SNPs. This change was propagated throughout the code and classes.
   - replaced lambda filtering for numpy boolean arrays to speed up computations.
   - snp-gene matrix is saved using bools instead of int.
 - msigdb2pkl.py
-
   - This implementation's result matches the older version.
   - jagged csv files are read differently. I keep 3 columns, of which, the gene name column holds a list of genes that are in each pathway.
   - a binary (boolean) matrix is created and used that fills entries array-wise based on genes in each pathway.
-  - Optionally, I'm thinking of adding a Jaccard filtering criteria to the pathways. TODO:
+  - TODO: Implement Jaccard dissimilarity filtering criteria to the pathways.
 - snppathway.py
-
   - This implementation's result matches the older version.
   - speed improvements with numpy array broadcasting when testing if pathway size is between 10 and 300
   - create a snp to pathway matrix using sparse dot product which speeds up this calculation tremendously
   - checks again now if pathways size is between 10 and 300 for SNPs this time.
   - removing any SNPs not in pathways, and any pathways with no SNPs.
 
-TODO: after confirming the modules after this are correct implementations of the previous BridGE version, recheck that these datatools are also working as intended and match the older version's results.
-
 ## ComputeInteraction
 
 - This implementation's result matches the older version.
 - matrix_operations_par.py
-  - change numpy array data type to float32 instead of float64 to reduce RAM usage. TODO:
   - kept the splitting of jobs implementation, however, I noticed that numpy uses all available CPUs for mat mul calculations. Therefore, instead of running split jobs simultaneously across workers (which would could also increase RAM usage with a large number of SNPs), I split jobs with n_jobs and n_workers are used within each job. This means that we can adjust how big the total SNP-SNP interaction computation is (n_jobs, reduce RAM usage) while still using many workers to run all the hypergeometric tests.
     - n_jobs won't make this module run any faster, but helps to keep RAM usage down if you have a system with that restriction
     - n_workers will reduce the time it takes to run this module
     - This could be advantageous for the VM options given by AoU, such as using the high-cpu VMs.
-  - Using sparse arrays for interaction network to save space. Need to convert to save just as coo and convert to csr when needed? TODO:
+  - Using sparse arrays for interaction network to save space.
   - Claude found a way to reduce 12 mat muls to 2, so instead of computing g10/g01/g00/x10/x01/x00 separately for both protective and risk networks, these are derived from row/column sums of g11/x11. This also removes dense intermediate arrays.
   - removed multiprocessing initialization of args and global variables.
-  - updated random seed generation of permuted pheno index. Wondering if this will need to be enhanced with ancestry information for AoU? TODO:
+  - updated random seed generation of permuted pheno index.
   - parallel pool is creatd in bridge.py so that we don't have to keep creating and closing workers, especially if we can use --R=5 to run all of the random networks sequentially, which is more doable with the efficient computations that have been implemented.
 - hygetest.py
-  - combined with HygeCache.py into one file.
-  - increased maxsize lru_cache from 100,000 to 2,000,000. No noticible increase in RAM with test data. Will need to test if I could instead use functools.cache (lighter weight) and see if RAM takes a big hit vs. computation time TODO:
+  - combined into one HygeCache.py file.
+  - Changed lru_cache to cache. No noticible increase in RAM with test data.
   - Switched from computing cumulative distribution function `1 - hypergeom.cdf()` to equivalent survival function `hypergeom.df()` as this will give greater numeric accuracy.
   - double checked and confirmed that even though the arg order is different to `_hyge_single()`, it is equivalent to the previous version, but this ordering made more sense to me.
 - HygeCache.py
@@ -175,8 +167,7 @@ TODO: after confirming the modules after this are correct implementations of the
 
 ## ComputeStats
 
-- bpmind.py saves wpmsize as (n^2 - n) TODO:
-  - since it's a within pathway there are duplicates within this symmetric matrix and wpmsize instead should be (n^2 - n) / 2.
+- bpmind.py saves wpmsize as (n^2 - n)
   - In WPM chi2 calculations, it does appear that wpmgi is calculated as the full matrix, so then the size would be doubled and this would then be accounted for
 - binarizing the network when binary_flag is false TODO:
   - uses a cutoff of 0.2, or ~0.63 pvalue

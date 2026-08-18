@@ -54,9 +54,13 @@ class snpsetclass():
     
     pathways (Series):      number of SNPs in each pathway, includes the pathway names as the index
     spmatrix (DataFrame):   snp to pathway mapping DataFrame
+    min_path (int):         minimum number of SNPs in a pathway
+    max_path (int):         maximum number of SNPs in a pathway
     """
     pathways: Series
     spmatrix: DataFrame
+    min_path: int
+    max_path: int
 
 @dataclass
 class bpmindclass():
@@ -109,7 +113,7 @@ class InteractionNetwork():
 class Stats():
     """Class for storing statistical results for BPMs, WPMs, and PATHs.
     
-    p-values depends on if the InteractionNetwork is optionally binarized. 
+    The p-values depends on if the InteractionNetwork is optionally binarized. 
     If binarized, p-values are chi2, otherwise they are ranksum.
     
     bpm_local (ndarray):            p-values for BPMs 

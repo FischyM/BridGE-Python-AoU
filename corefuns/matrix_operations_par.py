@@ -113,7 +113,7 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
     if R > 0:
         if not path.exists(cluster_file):
             # single deterministic permutation per R
-            rng = np.random.default_rng(66754 * R)
+            rng = np.random.default_rng(42 * R)
             permuted_idx = rng.permutation(population_size)
             pheno = pheno[permuted_idx]
         else:
@@ -307,18 +307,17 @@ def combine(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R):
     run(project_dir, 'DD', alpha1, alpha2, n_jobs, n_workers, pool, R)
 
     ## load results for 3 models
-    with open(f"{project_dir}/intermediate/ssM_mhygessi_RR_R{R}.pkl", 'rb') as rr_file:
-        rr_network: InteractionNetwork = pickle.load(rr_file)
-    with open(f"{project_dir}/intermediate/ssM_mhygessi_RD_R{R}.pkl", 'rb') as rd_file:
-        rd_network: InteractionNetwork = pickle.load(rd_file)
-    with open(f"{project_dir}/intermediate/ssM_mhygessi_DD_R{R}.pkl", 'rb') as dd_file:
-        dd_network: InteractionNetwork = pickle.load(dd_file)
+    with open(f"{project_dir}/intermediate/ssM_mhygessi_RR_R{R}.pkl", 'rb') as f:
+        rr_network: InteractionNetwork = pickle.load(f)
+    with open(f"{project_dir}/intermediate/ssM_mhygessi_RD_R{R}.pkl", 'rb') as f:
+        rd_network: InteractionNetwork = pickle.load(f)
+    with open(f"{project_dir}/intermediate/ssM_mhygessi_DD_R{R}.pkl", 'rb') as f:
+        dd_network: InteractionNetwork = pickle.load(f)
 
     risk_max, risk_max_id = combine_max(rr_network.risk, rd_network.risk, dd_network.risk)
     protective_max, protective_max_id = combine_max(rr_network.protective, rd_network.protective, dd_network.protective)
-
     network = InteractionNetwork(risk_max, protective_max, risk_max_id, protective_max_id)
     
     output_name = f"{project_dir}/intermediate/ssM_mhygessi_combined_R{R}.pkl"
-    with open(output_name, 'wb') as final:
-        pickle.dump(network, final)
+    with open(output_name, 'wb') as f:
+        pickle.dump(network, f)

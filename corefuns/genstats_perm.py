@@ -662,10 +662,7 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
         ### wpm ranksum
         print("\tWPM ranksum: ", end="")
         t1 = datetime.now()
-        ## NOTE: density_wpm deliberately keeps its binarized values outside ind2keep_wpm,
-        ## matching the original (which assigned to a misspelled `denisty_wpm` here).
-        # denisty_wpm = np.zeros(wpm_size)  # original had this typo
-        density_wpm = np.zeros(wpm_size)  # this is the correct one
+        density_wpm = np.zeros(wpm_size)
         wpmsum = np.zeros(wpm_size)
         wpm_local_tmp = np.ones(wpm_size)
         kept_wpm = np.flatnonzero(ind2keep_wpm)
@@ -786,58 +783,69 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
     wpm_local_pv[ind2keep_wpm] = (count_wpm + 1) / snpPerms
     path_degree_pv[ind2keep_path] = (count_path + 1) / snpPerms
 
-    return bpm_local, bpm_local_pv, density_bpm, density_bpm_expected, dense_index, wpm_local, wpm_local_pv, density_wpm, density_wpm_expected, path_degree, path_degree_pv
+    stats_obj = Stats(
+        bpm_local=bpm_local,
+        bpm_local_pv=bpm_local_pv,
+        density_bpm=density_bpm,
+        density_bpm_expected=density_bpm_expected,
+        dense_index=dense_index,
+        wpm_local=wpm_local,
+        wpm_local_pv=wpm_local_pv,
+        density_wpm=density_wpm,
+        density_wpm_expected=density_wpm_expected,
+        path_degree=path_degree,
+        path_degree_pv=path_degree_pv
+    )
+    
+    return stats_obj
 
-def genstats(ssmfile, bpmfile, binary_flag, snpPerms, minPath, n_jobs, n_workers, netDensity=None):
-    ### load bpmfile
-    with open(bpmfile, 'rb') as pklin:
-        bpm_obj: bpmindclass = pickle.load(pklin)
-    bpm = bpm_obj.bpm
-    wpm = bpm_obj.wpm
+def genstats(project_dir, model, R, min_path, binary_flag, net_density, snp_perms, n_jobs, n_workers):
+    
+    ### load pathway indices
+    with open(f"{project_dir}/intermediate/pathway_indices.pkl", 'rb') as f:
+        pathway_indices: bpmindclass = pickle.load(f)
+    bpm = pathway_indices.bpm
+    wpm = pathway_indices.wpm
     print(f"\tloaded {bpm.shape[0]:,} BPMs and {wpm.shape[0]} WPMs")
 
     ### load interaction network
-    with open(ssmfile, 'rb') as pklin:
-        network: InteractionNetwork = pickle.load(pklin)
+    with open(f"{project_dir}/intermediate/ssM_mhygessi_{model}_R{R}.pkl", 'rb') as f:
+        network: InteractionNetwork = pickle.load(f)
     p_network = as_sparse(network.protective)
     r_network = as_sparse(network.risk)
-
-    print(f"\t{p_network.shape[0] * p_network.shape[1]:,} entries in the SNP-SNPinteraction network")
+    
+    print(f"\t{p_network.shape[0] * p_network.shape[1]:,} entries in the SNP-SNP interaction network")
     p_density = p_network.nnz / (p_network.shape[0] * p_network.shape[1]) * 100
     print(f"\t{p_density:.2f}% of the entries are nonzero in protective network")
     r_density = r_network.nnz / (r_network.shape[0] * r_network.shape[1]) * 100
     print(f"\t{r_density:.2f}% of the entries are nonzero in risk network")
 
     if binary_flag:
-        if netDensity is None:
+        if net_density is None:
             ## every stored value is > 0, so this is just "set the stored values to 1"
             p_network = binarize(p_network, 0)
             r_network = binarize(r_network, 0)
         else:
-            p_cutoff = sparse_quantile(p_network, 1 - netDensity)
-            r_cutoff = sparse_quantile(r_network, 1 - netDensity)
-            ## a cutoff of 0 would binarize the zeros too, i.e. densify to an all-ones s x s
-            ## matrix. That is unrepresentable sparsely (and almost certainly not intended),
-            ## so fall back to keeping the stored entries and say so.
+            p_cutoff = sparse_quantile(p_network, 1 - net_density)
+            r_cutoff = sparse_quantile(r_network, 1 - net_density)
+            # a cutoff of anything less than 0 would binarize the zeros too, i.e. densify to an all-ones s x s matrix. 
+            # That is unrepresentable sparsely (and almost certainly not intended), so fall back to keeping the stored entries and say so.
             for name, cutoff in (('protective', p_cutoff), ('risk', r_cutoff)):
                 if cutoff <= 0:
-                    print(f"\twarning: netDensity={netDensity} puts the {name} cutoff at "
+                    print(f"\twarning: net_density={net_density} puts the {name} cutoff at "
                           f"{cutoff}; keeping all nonzero entries instead of densifying")
-            p_network = binarize(p_network, max(p_cutoff, np.finfo(np.float64).tiny))
-            r_network = binarize(r_network, max(r_cutoff, np.finfo(np.float64).tiny))
-
+            p_network = binarize(p_network, 0)
+            r_network = binarize(r_network, 0)
+            
     print(f"running genstats on protective network")
-    p_results = rungenstats(p_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs, n_workers)
-    p_stats = Stats(*p_results)
-
+    protective_stats = rungenstats(p_network, bpm, wpm, min_path, binary_flag, snp_perms, n_jobs, n_workers)
+    
     print(f"running genstats on risk network")
-    r_results = rungenstats(r_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs, n_workers)
-    r_stats = Stats(*r_results)
+    risk_stats = rungenstats(r_network, bpm, wpm, min_path, binary_flag, snp_perms, n_jobs, n_workers)
+    
     print()
-
-    out_obj = GenstatsOut(p_stats, r_stats)
-    tmp = ssmfile.split('/')
-    tmp[-1] = 'genstats_' + tmp[-1]
-    outputfile = '/'.join(tmp)
-    with open(outputfile, 'wb') as final:
-        pickle.dump(out_obj, final)
+    out_obj = GenstatsOut(protective_stats, risk_stats)
+    
+    output_file = f"{project_dir}/intermediate/genstats_ssM_mhygessi_{model}_R{R}.pkl"
+    with open(output_file, 'wb') as f:
+        pickle.dump(out_obj, f)
