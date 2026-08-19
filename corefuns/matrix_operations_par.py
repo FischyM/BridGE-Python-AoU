@@ -63,11 +63,11 @@ def helper_score_from_counts(cache, g11, x11, g10, x10, g01, x01, g00, x00, alph
     log_out[q_min == 0] = 0
     log_out[~np.isfinite(log_out)] = 0
     log_out[log_out < 0] = 0
-    # original also had `log_out[p11 == 0] = 0`, but p11 is always >= eps > 0 here
+    # NOTE: original also had `log_out[p11 == 0] = 0`, but p11 is always >= eps > 0 here
     # (it was dead code in the original too) so it's omitted.
     return log_out
 
-def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
+def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     """Computes the interaction network for a single model (RR, RD, or DD) and saves it to a pickle file.
 
     Args:
@@ -89,7 +89,7 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
     with open(f"{project_dir}/intermediate/snp_data.pkl", "rb") as f:
         snp_data: SNPclass = pickle.load(f)
     pheno = snp_data.pheno
-    G  = snp_data.data  # assuming there are no missing values in the genotype data (i.e., no -9s)
+    G = snp_data.data  # assuming there are no missing values in the genotype data (i.e., no -9s)
     
     # convert genotype data to dominant and recessive coding with a simple mapping
     dom_map = np.array([0, 1, 1])  # dominant:  0->0, 1->1, 2->1 
@@ -113,7 +113,7 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
     if R > 0:
         if not path.exists(cluster_file):
             # single deterministic permutation per R
-            rng = np.random.default_rng(42 * R)
+            rng = np.random.default_rng(seed * R)
             permuted_idx = rng.permutation(population_size)
             pheno = pheno[permuted_idx]
         else:
@@ -247,7 +247,12 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R):
         result_protective.setdiag(0)
         result_protective.eliminate_zeros()
 
-    network = InteractionNetwork(result_risk, result_protective, None, None)
+    network = InteractionNetwork(
+        risk=result_risk,
+        protective=result_protective,
+        risk_max_id=None,
+        protective_max_id=None
+    )
 
     with open(output_name, 'wb') as final:
         pickle.dump(network, final)   
@@ -290,7 +295,7 @@ def combine_max(rr, rd, dd):
     
     return network_max, network_max_id
 
-def combine(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R):
+def combine(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     """Run the three models (RR, RD, DD) and combine their results into a single InteractionNetwork.
 
     Args:
@@ -301,23 +306,30 @@ def combine(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R):
         n_workers (int): _description_
         pool (multiprocessing.Pool): The process pool to use for parallel processing.
         R (int): _description_
+        seed (int): _description_
     """
-    run(project_dir, 'RR', alpha1, alpha2, n_jobs, n_workers, pool, R)
-    run(project_dir, 'RD', alpha1, alpha2, n_jobs, n_workers, pool, R)
-    run(project_dir, 'DD', alpha1, alpha2, n_jobs, n_workers, pool, R)
+    run(project_dir, 'RR', alpha1, alpha2, n_jobs, n_workers, pool, R, seed)
+    run(project_dir, 'RD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed)
+    run(project_dir, 'DD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed)
 
     ## load results for 3 models
-    with open(f"{project_dir}/intermediate/ssM_mhygessi_RR_R{R}.pkl", 'rb') as f:
-        rr_network: InteractionNetwork = pickle.load(f)
-    with open(f"{project_dir}/intermediate/ssM_mhygessi_RD_R{R}.pkl", 'rb') as f:
-        rd_network: InteractionNetwork = pickle.load(f)
-    with open(f"{project_dir}/intermediate/ssM_mhygessi_DD_R{R}.pkl", 'rb') as f:
-        dd_network: InteractionNetwork = pickle.load(f)
+    with open(f"{project_dir}/intermediate/ssM_mhygessi_RR_R{R}.pkl", 'rb') as rr_file:
+        rr_network: InteractionNetwork = pickle.load(rr_file)
+    with open(f"{project_dir}/intermediate/ssM_mhygessi_RD_R{R}.pkl", 'rb') as rd_file:
+        rd_network: InteractionNetwork = pickle.load(rd_file)
+    with open(f"{project_dir}/intermediate/ssM_mhygessi_DD_R{R}.pkl", 'rb') as dd_file:
+        dd_network: InteractionNetwork = pickle.load(dd_file)
 
     risk_max, risk_max_id = combine_max(rr_network.risk, rd_network.risk, dd_network.risk)
     protective_max, protective_max_id = combine_max(rr_network.protective, rd_network.protective, dd_network.protective)
-    network = InteractionNetwork(risk_max, protective_max, risk_max_id, protective_max_id)
+
+    network = InteractionNetwork(
+        risk=risk_max,
+        protective=protective_max,
+        risk_max_id=risk_max_id,
+        protective_max_id=protective_max_id
+    )
     
     output_name = f"{project_dir}/intermediate/ssM_mhygessi_combined_R{R}.pkl"
-    with open(output_name, 'wb') as f:
-        pickle.dump(network, f)
+    with open(output_name, 'wb') as final:
+        pickle.dump(network, final)

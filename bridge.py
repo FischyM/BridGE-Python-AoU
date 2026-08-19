@@ -2,12 +2,11 @@ import argparse, sys
 from os import path
 import multiprocessing as mp
 
-from corefuns import collectresults as cl
-from corefuns import fdrsampleperm as fdr
-from corefuns import genstats_perm as gs
-from corefuns import matrix_operations_par as ci
 import datatools
-
+from corefuns import matrix_operations_par as ci
+from corefuns import genstats_perm as gs
+from corefuns import fdrsampleperm as fdr
+from corefuns import collectresults as cl
 
 MODULE_CHOICES = ('DataProcess', 'ComputeInteraction', 'ComputeStats', 'ComputeFDR', 'Summarize')
 VALID_MODELS = ('RR', 'RD', 'DD', 'combined')
@@ -28,6 +27,7 @@ def parse_args():
     p.add_argument('--R', dest='r', type=int, default=-1)
     p.add_argument('--densityCutoff', dest='densitycutoff', type=float, default=None)
     p.add_argument('--seed', dest='seed', type=int, default=42)
+    p.add_argument('--ssmFile', dest='ssmfile', default=None)
     
     # data processing arguments
     p.add_argument('--plinkFile', dest='plinkfile', default='')
