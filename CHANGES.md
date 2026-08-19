@@ -147,7 +147,9 @@ Since AoU has diverse ancestry samples, we fill in any missing variant values (w
 ## ComputeInteraction
 
 - This implementation's result matches the older version.
+- TODO: add in memory tracking for users to identify best configuration of n_workers and n_jobs
 - matrix_operations_par.py
+  - TODO: add in a seed arg to control what random permutations get seeded with.
   - kept the splitting of jobs implementation, however, I noticed that numpy uses all available CPUs for mat mul calculations. Therefore, instead of running split jobs simultaneously across workers (which would could also increase RAM usage with a large number of SNPs), I split jobs with n_jobs and n_workers are used within each job. This means that we can adjust how big the total SNP-SNP interaction computation is (n_jobs, reduce RAM usage) while still using many workers to run all the hypergeometric tests.
     - n_jobs won't make this module run any faster, but helps to keep RAM usage down if you have a system with that restriction
     - n_workers will reduce the time it takes to run this module
@@ -167,6 +169,7 @@ Since AoU has diverse ancestry samples, we fill in any missing variant values (w
 
 ## ComputeStats
 
+- TODO: add in memory tracking for users to identify best configuration of n_workers and n_jobs
 - bpmind.py saves wpmsize as (n^2 - n)
   - In WPM chi2 calculations, it does appear that wpmgi is calculated as the full matrix, so then the size would be doubled and this would then be accounted for
 - binarizing the network when binary_flag is false TODO:

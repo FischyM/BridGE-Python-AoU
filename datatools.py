@@ -54,18 +54,15 @@ def plink2pkl(pgen_file, pvar_file, psam_file, output_file):
         pgr.read_range(0, m, G)
         
     G = G.T  # samples x variants
-    # TODO: should we convert missing to zero here?
-    # code missing values as NaN for proper handling, which means int8 -> float64
-    # G = G.T.astype(np.float64)  
-    # G[G == -9] = np.nan
     
     print(f"Genotype matrix composition: {np.unique(G, return_counts=True)}")
     print(f"    Percentage of zero values: {(G.size - np.count_nonzero(G)) / G.size:.2%}")
     print(f"    Percentage of missing values: {( np.sum(G == -9) / G.size ):.2%}")
+    
+    print("Setting any missing values to zero and plotting the resulting MAF distribution.")
+    G[G == -9] = 0
 
-    valid = (G != -9)
-    freq  = np.where(valid, G, 0).sum(0) / (2 * valid.sum(0))
-    maf = np.minimum(freq, 1 - freq)
+    maf = np.nanmean(G, axis=0) / 2
     plt.hist(maf, bins=50)
     plt.xlabel("MAF"); plt.ylabel("variants"); plt.show()
     
@@ -209,6 +206,8 @@ def mapsnp2gene(pvar_file, gene_annotation_file, mapping_distance, output_file):
     with open(output_file, 'wb') as f:
         pickle.dump(snp_gene_class, f)
     
+    return snp_gene_df
+    
 
 def snppathway(project_dir, min_path, max_path, output_file):
     """Creates a snp-to-pathway mapping.
@@ -288,8 +287,8 @@ def snppathway(project_dir, min_path, max_path, output_file):
         pickle.dump(snp_set, f)
 
 
-def bpmind(project_dir, output_file):
-    """Exctracts SNP indices for BPM/WPM sets. Saves a BPMind.pkl file with a bpmindclass class."""
+def bpmind(project_dir, min_path, output_file):
+    """Exctracts SNP indices for BPM/WPM sets."""
 
     # Reading in data files
     with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
@@ -333,23 +332,23 @@ def bpmind(project_dir, output_file):
             
             ind1size.append(len(ind1))
             ind2size.append(len(ind2))
-
+            
     # Getting between pathway sizes by multiplying combination available pairs.
-    if (len(pathways) > 1):
-        size = np.array(ind1size) * np.array(ind2size)
-        # Orienting bpm/wpm data and converting to dataframes.
-        bpmdata = {
-            'path1names': combnames[:, 0], 'ind1': BPMind1, 'ind1size': ind1size, 
-            'path2names': combnames[:, 1], 'ind2': BPMind2, 'ind2size': ind2size, 
-            'size': size,
-            }
-    else:
-        bpmdata = {
-            'path1names': [], 'ind1size': [],
-            'path2names': [], 'ind2size': [],
-            'size': [],
-            }
+    size = np.array(ind1size) * np.array(ind2size)
+    
+    # Orienting bpm/wpm data and converting to dataframes.
+    bpmdata = {
+        'path1names': combnames[:, 0], 'ind1': BPMind1, 'ind1size': ind1size, 
+        'path2names': combnames[:, 1], 'ind2': BPMind2, 'ind2size': ind2size, 
+        'size': size,
+        }
     bpm = pd.DataFrame(bpmdata)
+    orig_size = len(bpm)
+    
+    # filter out pathways that are too small after removing SNPs that are in both pathways of a BPM
+    bpm = bpm[(bpm['ind1size'] >= min_path) & (bpm['ind2size'] >= min_path)]
+    print(f"Total number of BPMs: {orig_size}")
+    print(f"Total BPMs filtered with min_path={min_path}: {orig_size - len(bpm)}")
 
     # Saving bpmind data to pickle file.
     bpmobj = bpmindclass(bpm=bpm, wpm=wpm)

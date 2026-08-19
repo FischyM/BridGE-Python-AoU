@@ -24,17 +24,17 @@ def parse_args():
     p.add_argument('--model', choices=VALID_MODELS, default='combined')
     p.add_argument('--nJobs', dest='n_jobs', type=int, default=10)
     p.add_argument('--nWorker', dest='n_workers', type=int, default=None)  # None means use all available cores
-    p.add_argument('--minPath', type=int, default=10)  # TODO: is this needed for compute stats? How can this permeate through?
     p.add_argument('--i', type=int, default=-1)
     p.add_argument('--R', dest='r', type=int, default=-1)
     p.add_argument('--densityCutoff', dest='densitycutoff', type=float, default=None)
-    p.add_argument('--ssmfile', default=None)
+    p.add_argument('--seed', dest='seed', type=int, default=42)
     
     # data processing arguments
     p.add_argument('--plinkFile', dest='plinkfile', default='')
     p.add_argument('--genesets', default='c2.cp.v7.1')
     p.add_argument('--geneAnnotation', dest='gene_annotation', default='glist-hg38')
     p.add_argument('--mappingDistance', type=int, default=50000)
+    p.add_argument('--minPath', type=int, default=10)
     p.add_argument('--maxPath', type=int, default=300)
     
     # compute interaction arguments
@@ -46,12 +46,10 @@ def parse_args():
     p.add_argument('--snpPerms', dest='snp_perms', type=int, default=10000)
     
     # compute fdr arguments
-    p.add_argument('--samplePerms', dest='sample_perms', type=int, default=10)  # this is just R, so maybe it isn't needed to be a separate argument? but it is for now
     p.add_argument('--pvalueCutoff', dest='pval_cutoff', type=float, default=0.05)
     
     # summarize arguments
     p.add_argument('--fdrcut', type=float, default=0.25)
-    p.add_argument('--snpPathFile', dest='snppathwayfile', default='snp_pathway_min10_max300.pkl') # TODO: may not need this. save as an unambigous file with min and max saved to the dataclass
     
     return p.parse_args()
 
@@ -63,6 +61,7 @@ def require_exists(*filepaths):
 def run_data_process(args):
     print('data processing...')
 
+    # load in plink files and convert to pkl format. Additionally converts missing genotypes to 0
     pgen_file = f"{args.project_dir}/raw/{args.plinkfile}.pgen"
     pvar_file = f"{args.project_dir}/raw/{args.plinkfile}.pvar"
     psam_file = f"{args.project_dir}/raw/{args.plinkfile}.psam"
@@ -70,6 +69,7 @@ def run_data_process(args):
     snp_data_pkl = f"{args.project_dir}/intermediate/snp_data.pkl"
     datatools.plink2pkl(pgen_file, pvar_file, psam_file, snp_data_pkl)
 
+    # create a gene to pathway mapping from MSigDB gene set file.
     symbols_file = f"{args.project_dir}/raw/{args.genesets}.symbols.gmt"
     entrez_file = f"{args.project_dir}/raw/{args.genesets}.entrez.gmt"
     require_exists(symbols_file, entrez_file)
@@ -77,18 +77,21 @@ def run_data_process(args):
     datatools.msigdb2pkl(symbols_file, entrez_file, gene_pathway_pkl)
     # TODO: reduce gene set based on Jaccard similarity?
 
+
+    # create a mapping of SNPs to genes with a mappingDistance extension to the start and end of each gene
+    # using a gene annotation file downloaded from Plink.
     gene_annotation_file = f"{args.project_dir}/raw/{args.gene_annotation}"
     require_exists(gene_annotation_file)
     snp_gene_pkl = f"{args.project_dir}/intermediate/snp_gene_mapping.pkl"
     datatools.mapsnp2gene(pvar_file, gene_annotation_file, args.mappingDistance, snp_gene_pkl)
 
+    # create a mapping of SNPs to pathways using the snp_date.pkl, snp_gene_mapping.pkl and gene_pathway_mapping.pkl files.
     snp_pathway_pkl = f"{args.project_dir}/intermediate/snp_pathway_mapping.pkl"
     datatools.snppathway(args.project_dir, args.minPath, args.maxPath, snp_pathway_pkl)
     
+    # create a mapping of SNP indices for BPM/WPM sets using the snp_pathway_mapping.pkl file.
     pathway_inds_pkl = f"{args.project_dir}/intermediate/pathway_indices.pkl"
-    datatools.bpmind(args.project_dir, pathway_inds_pkl)
-    # TODO: add in min_path here to remove pathways that are too small (after removing SNPs in both BPM pathways)
-    # that are thrown out anyways in Compute Stats
+    datatools.bpmind(args.project_dir, args.minPath, pathway_inds_pkl)
 
 def run_compute_interaction(args):
 
@@ -99,15 +102,17 @@ def run_compute_interaction(args):
     indices = range(args.r + 1) if args.r >= 0 else [args.i]
     for i in indices:
         if args.model == 'combined':
-            ci.combine(args.project_dir, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i)
+            ci.combine(args.project_dir, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
             print("\n")
         else:
-            ci.run(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i)
+            ci.run(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
 
     pool.close()
     pool.join()
 
 def run_compute_stats(args):
+    
+    # TODO: add in memory tracking? See test_code-small_snps.ipynb for example
 
     bpmfile = f"{args.project_dir}/intermediate/pathway_indices.pkl"
     require_exists(bpmfile)
@@ -120,14 +125,14 @@ def run_compute_stats(args):
         ssmfile = f"{args.project_dir}/intermediate/{args.ssmfile}"
         print(f'Computing statistics on {args.ssmfile}')
         gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snp_perms,
-                    args.minPath, args.n_jobs, args.n_workers, args.densitycutoff)
+                    args.minPath, args.n_jobs, args.n_workers, args.densitycutoff, args.seed)
     else:
         indices = range(args.r + 1) if args.r >= 0 else [args.i]
         for i in indices:
             ssmfile = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R{i}.pkl"
             print(f'Computing statistics on {args.model}_R{i}')
             gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snp_perms,
-                        args.minPath, args.n_jobs, args.n_workers, args.densitycutoff)
+                        args.minPath, args.n_jobs, args.n_workers, args.densitycutoff, args.seed)
 
 def run_compute_fdr(args):
     if args.ssmfile is None:
