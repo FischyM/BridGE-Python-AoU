@@ -30,7 +30,9 @@ however, I would add the following:
 
 ```bash
 conda create -name bridge-aou -c conda-forge python=3.12 matplotlib networkx numpy pandas scipy seaborn cython jupyterlab ipython scikit-learn polars bioconda::pgenlib openpyxl
-pip install memory_profiler  # for tracking RAM usage
+pip install memory_profiler  # for tracking RAM usage TODO:
+pip install psrecord  # maybe a better RAM tracking? TODO:
+pip install psutil
 conda env export > updated-environment.yml
 # conda env create -f updated-environment.yml
 # TODO: remake the environment with just the essential packages

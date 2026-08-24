@@ -1,6 +1,6 @@
 import argparse, sys
-from os import path
 import multiprocessing as mp
+from os import path
 
 import datatools
 from corefuns import matrix_operations_par as ci
@@ -8,12 +8,13 @@ from corefuns import genstats_perm as gs
 from corefuns import fdrsampleperm as fdr
 from corefuns import collectresults as cl
 
+
 MODULE_CHOICES = ('DataProcess', 'ComputeInteraction', 'ComputeStats', 'ComputeFDR', 'Summarize')
 VALID_MODELS = ('RR', 'RD', 'DD', 'combined')
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description='BridGE pipeline', allow_abbrev=False, suggest_on_error=True)
+    p = argparse.ArgumentParser(description='BridGE pipeline', allow_abbrev=False)
     
     # required arguments
     p.add_argument('--projectDir', dest='project_dir', required=True)
@@ -95,7 +96,8 @@ def run_data_process(args):
 
 def run_compute_interaction(args):
 
-    # TODO: add in memory tracking? See test_code-small_snps.ipynb for example
+    # TODO: add in memory tracking?
+    # TODO: redo/remove per job split print statements?
     
     pool = mp.Pool(processes=args.n_workers)
     
@@ -103,19 +105,16 @@ def run_compute_interaction(args):
     for i in indices:
         if args.model == 'combined':
             ci.combine(args.project_dir, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
-            print("\n")
         else:
             ci.run(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
-
+        print(flush=True)
+        
     pool.close()
     pool.join()
 
 def run_compute_stats(args):
     
-    # TODO: add in memory tracking? See test_code-small_snps.ipynb for example
-
-    bpmfile = f"{args.project_dir}/intermediate/pathway_indices.pkl"
-    require_exists(bpmfile)
+    # TODO: add in memory tracking?
 
     if args.n_jobs < 2:
         args.n_jobs = 2
@@ -124,25 +123,25 @@ def run_compute_stats(args):
     if args.ssmfile is not None:
         ssmfile = f"{args.project_dir}/intermediate/{args.ssmfile}"
         print(f'Computing statistics on {args.ssmfile}')
-        gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snp_perms,
-                    args.minPath, args.n_jobs, args.n_workers, args.densitycutoff, args.seed)
+        gs.genstats(args.project_dir, ssmfile, args.binaryNetwork, args.densitycutoff, 
+                    args.snp_perms, args.n_jobs, args.n_workers, args.seed)
+
     else:
         indices = range(args.r + 1) if args.r >= 0 else [args.i]
         for i in indices:
             ssmfile = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R{i}.pkl"
             print(f'Computing statistics on {args.model}_R{i}')
-            gs.genstats(ssmfile, bpmfile, args.binaryNetwork, args.snp_perms,
-                        args.minPath, args.n_jobs, args.n_workers, args.densitycutoff, args.seed)
+            gs.genstats(args.project_dir, ssmfile, args.binaryNetwork, args.densitycutoff,
+                        args.snp_perms, args.n_jobs, args.n_workers, args.seed)
 
 def run_compute_fdr(args):
     if args.ssmfile is None:
         ssmfile = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R0.pkl"
     else:
         ssmfile = f"{args.project_dir}/intermediate/{args.ssmfile}"
-    require_exists(ssmfile)
 
     print(f'Computing FDR')
-    fdr.fdrsampleperm(ssmfile, args.pval_cutoff, args.sample_perms)
+    fdr.fdrsampleperm(args.project_dir, ssmfile, args.pval_cutoff, args.R)
 
 def run_summarize(args):
     bpmfile = f"{args.project_dir}/intermediate/BPM_WPM_indices.pkl"
@@ -151,7 +150,7 @@ def run_summarize(args):
     snppathwayfile = f"{args.project_dir}/intermediate/{args.snppathwayfile}"
     require_exists(snppathwayfile)
 
-    # TODO: this should be made into a dataclass that is unambiguous to load
+    # TODO: this should be made into a dataclass that is unambiguous to load?
     snpgenemappingfile = f"{args.project_dir}/intermediate/snpgenemapping_{args.mappingDistance // 1000}kb.pkl"
     require_exists(snpgenemappingfile)
 

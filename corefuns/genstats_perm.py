@@ -53,11 +53,11 @@ np.seterr(divide='ignore', invalid='ignore')
 # BEHAVIOUR NOTES (differences from the old file):
 #   - Empirical p-values are REPRODUCIBLE: for a given snpPerms they do not depend on n_workers
 #     or n_jobs, so a result can be reproduced on any machine. The original did not have this
-#     property - it seeded one RNG stream per worker (PERM_SEED + proc*1000, each of length
+#     property - it seeded one RNG stream per worker (seed + proc*1000, each of length
 #     snpPerms/n_workers), so changing the worker count changed the set of permutations drawn
 #     and hence the p-values.
 #     The canonical stream here is the original's n_workers=1 stream: one legacy MT19937 seeded
-#     PERM_SEED, snpPerms draws, COMPOUNDING (the original reassigned mmtmp, so iteration k acts
+#     with `seed`, snpPerms draws, COMPOUNDING (the original reassigned mmtmp, so iteration k acts
 #     on the composition of every draw so far). So this matches an original run at n_workers=1
 #     exactly, and will differ from an original run at any other worker count -- but those runs
 #     were not reproducible to begin with.
@@ -88,8 +88,6 @@ np.seterr(divide='ignore', invalid='ignore')
 #       - protective_stats: Statistics for protective network including ranksum scores,empirical p-values, expected density for BPM/WPMs
 #       - risk_stats: Statistics for risk network including ranksum scores,empirical p-values, expected density for BPM/WPMs
 
-
-PERM_SEED = 349898398
 
 class perm_args:
     def __init__(self, skip, count):
@@ -245,7 +243,7 @@ def call_chi2(table):
     n_neg = int(np.count_nonzero(negative))
     if n_neg:
         print(f"\twarning: {n_neg} chi2 table row(s) contained a negative count and were set "
-              f"to p=1; check the size vs interaction-count pair conventions upstream")
+              f"to p=1; check the size vs interaction-count pair conventions upstream", flush=True)
     return results
 
 def tie_sum(values):
@@ -375,7 +373,7 @@ def snp_permutation_parallel(perm_args):
 
     The permutation SEQUENCE reproduces the original bit for bit. Two details make that work:
 
-    1. The RNG is the legacy global MT19937, seeded per worker as PERM_SEED + id * 1000, drawing
+    1. The RNG is the legacy global MT19937, seeded per worker as seed + id * 1000, drawing
        exactly one np.random.permutation(s) per iteration. Switching to np.random.default_rng
        would draw a different sequence even from the same nominal seed.
 
@@ -401,12 +399,13 @@ def snp_permutation_parallel(perm_args):
     col_ranks = _SHARED['col_ranks']
     col_ties = _SHARED['col_ties']
     path_lens = _SHARED['path_lens']
+    seed = _SHARED['seed']
     s = mm.shape[0]
 
     ## ONE canonical stream, seeded the same way regardless of n_workers or n_jobs, so the
     ## permutations - and therefore the empirical p-values - are reproducible on any hardware.
     ## This is exactly the stream the original produced when run with n_workers=1.
-    np.random.seed(PERM_SEED)
+    rng = np.random.default_rng(seed)
 
     count_bpm = np.zeros(bpmsum_obs.size)
     count_wpm = np.zeros(wpmsum_obs.size)
@@ -415,16 +414,16 @@ def snp_permutation_parallel(perm_args):
     bpmsum_tmp = np.empty(bpmsum_obs.size)
     n_out_path = s - path_lens
 
-    q = np.arange(s)  # cumulative permutation, matching the original's reassignment of mmtmp
+    q_init = np.arange(s)  # cumulative permutation, matching the original's reassignment of mmtmp
 
     ## Advance to this piece's start by drawing and composing the permutations it is not
     ## evaluating. A draw is well under 1% of an evaluated iteration, so this is close to free,
     ## and it means the stream is identical to a worker that ran the whole share end to end.
     for _ in range(perm_args.skip):
-        q = q[np.random.permutation(s)]
+        rng.permutation(s)
 
     for perm in range(perm_args.count):
-        q = q[np.random.permutation(s)]
+        q = q_init[rng.permutation(s)]
         inv = np.empty(s, dtype=np.int64)      # inverse by scatter: O(s), not O(s log s)
         inv[q] = np.arange(s, dtype=np.int64)
 
@@ -451,14 +450,14 @@ def snp_permutation_parallel(perm_args):
 # main routine
 # ---------------------------------------------------------------------------
 
-def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs, n_workers):
+def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_workers, seed):
     ## inputs:
     ## - input_network: scipy.sparse interaction network (csr_array)
     ## - bpm: bpm dataframe
     ## - wpm: wpm dataframe
-    ## - minPath: minimum number of snps in a pathway
     ## - binary_flag: flag to make the interaction network binary
     ## - n_jobs: sequential work chunks (RAM), n_workers: pool width (speed)
+    ## - seed: RNG seed for the SNP permutation stage
 
     n_jobs = max(int(n_jobs), 1)
     n_workers = max(int(n_workers), 1)
@@ -500,7 +499,7 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
     pmat = indicator_matrix(path_lists, s)
 
     ### BPM binary chi2
-    print("\tBPM chi2: ", end="")
+    print("\tBPM chi2: ", end="", flush=True)
     t1 = datetime.now()
     # bpm genetic interaction counts + background interactions, in n_jobs sequential chunks
     # of n_workers parallel slices. `tr` is now a mask instead of an O(n^2) `in` test.
@@ -565,7 +564,7 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
     chi2_bpm_local[dense_index == 2] = chi2_bpm_2[dense_index == 2]
 
     ## keeping track of significant bpms
-    ind2keep_bpm = (chi2_bpm_local >= (-1.0 * np.log10(0.1))) & (bpmind1size >= minPath) & (bpmind2size >= minPath)
+    ind2keep_bpm = (chi2_bpm_local >= (-1.0 * np.log10(0.1)))
 
     ## keeping denser pathway in ind1_new
     swap = dense_index == 2
@@ -576,10 +575,10 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
     ## pairs to keep
     bpmind1 = ind1_new[ind2keep_bpm]
     bpmind2 = ind2_new[ind2keep_bpm]
-    print(f"{ind2keep_bpm.sum()} passed - {str(datetime.now() - t1).split('.')[0]}")
+    print(f"{ind2keep_bpm.sum():,} passed - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
     ###WPM Chi2
-    print("\tWPM chi2: ", end="")
+    print("\tWPM chi2: ", end="", flush=True)
     t1 = datetime.now()
     ## one sparse product replaces the per-pathway loop; the diagonal of P.T @ mm @ P is
     ## exactly sum(mm[ind[i], :][:, ind[i]]).
@@ -601,7 +600,7 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
     under_wpm = wpmgi / (wpmgi + wpmnotgi) < pathbggi / (pathbggi + pathbgnotgi)
     chi2_wpm[under_wpm] = -1 * chi2_wpm[under_wpm]
     ind2keep_wpm = (chi2_wpm >= -1 * np.log10(0.1))
-    print(f"{ind2keep_wpm.sum()} passed - {str(datetime.now() - t1).split('.')[0]}")
+    print(f"{ind2keep_wpm.sum():,} passed - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
     ##### mutual binary - non-binary ends here
 
@@ -633,7 +632,7 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
         mm = mm_scores
         sumMM = np.asarray(mm.sum(axis=1)).ravel()
         ## ranksum test
-        print("\tBPM ranksum: ", end="")
+        print("\tBPM ranksum: ", end="", flush=True)
         t1 = datetime.now()
         bpmsum = np.zeros(bpm_size)
         density_bpm = np.zeros(bpm_size)
@@ -657,10 +656,10 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
         bpmsum[ind2keep_bpm] = bpmsum_tmp
         ## update ind2keep_bpm
         ind2keep_bpm = (bpm_local >= -1 * np.log10(0.05))
-        print(f"{ind2keep_bpm.sum()} passed - {str(datetime.now() - t1).split('.')[0]}")
+        print(f"{ind2keep_bpm.sum():,} passed - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
         ### wpm ranksum
-        print("\tWPM ranksum: ", end="")
+        print("\tWPM ranksum: ", end="", flush=True)
         t1 = datetime.now()
         density_wpm = np.zeros(wpm_size)
         wpmsum = np.zeros(wpm_size)
@@ -682,9 +681,9 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
         wpm_local = np.zeros(wpm_size)
         wpm_local[ind2keep_wpm] = -1 * np.log10(wpm_local_tmp[ind2keep_wpm])
         ind2keep_wpm = (wpm_local >= -1 * np.log10(0.05))
-        print(f"{ind2keep_wpm.sum()} passed - {str(datetime.now() - t1).split('.')[0]}")
+        print(f"{ind2keep_wpm.sum():,} passed - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
-    print("\tComputing expected densities ", end="")
+    print("\tComputing expected densities ", end="", flush=True)
     t1 = datetime.now()
     ## Recomputed here, at the same point the original does it, so that the non-binary branch's
     ## narrowed ind2keep_bpm is reflected in the pairs used from here on (the permutation stage
@@ -712,12 +711,11 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
     rank_in = np.asarray(pmat.T @ row_ranks).ravel()
     path_degree = -1 * np.log10(mw_greater(rank_in, path_lens, s - path_lens, row_ties))
     ind2keep_path = (path_degree >= -1 * np.log10(0.1))
-    print(f"- {str(datetime.now() - t1).split('.')[0]}")
+    print(f"- {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
     ## random snp permutation to compute emirical p-value for the significant bpms
-    print("\tSNP permutation ", end="")
+    print("\tSNP permutation ", end="", flush=True)
     t1 = datetime.now()
-    np.random.seed(PERM_SEED)  # inert (every worker reseeds), but the original set it here
     bpm_local_pv = np.ones(bpm_size)
     wpm_local_pv = np.ones(wpm_size)
     path_degree_pv = np.ones(wpm_size)
@@ -748,6 +746,7 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
         col_ranks=rankdata(col_sums),
         col_ties=tie_sum(col_sums),
         path_lens=path_lens[ind2keep_path],
+        seed=seed,
     )
 
     count_bpm = np.zeros(bpmind1.shape[0])
@@ -777,7 +776,7 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
         count_wpm = count_wpm + res[1]
         count_path = count_path + res[2]
     clear_shared()
-    print(f"- {str(datetime.now() - t1).split('.')[0]}")
+    print(f"- {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
     bpm_local_pv[ind2keep_bpm] = (count_bpm + 1) / snpPerms
     wpm_local_pv[ind2keep_wpm] = (count_wpm + 1) / snpPerms
@@ -799,26 +798,28 @@ def rungenstats(input_network, bpm, wpm, minPath, binary_flag, snpPerms, n_jobs,
     
     return stats_obj
 
-def genstats(project_dir, model, R, min_path, binary_flag, net_density, snp_perms, n_jobs, n_workers):
+def genstats(project_dir, ssmfile, binary_flag, net_density, snp_perms, n_jobs, n_workers, seed):
     
-    ### load pathway indices
+    # load pathway indices
     with open(f"{project_dir}/intermediate/pathway_indices.pkl", 'rb') as f:
         pathway_indices: bpmindclass = pickle.load(f)
     bpm = pathway_indices.bpm
     wpm = pathway_indices.wpm
-    print(f"\tloaded {bpm.shape[0]:,} BPMs and {wpm.shape[0]} WPMs")
+    print(f"\tloaded {bpm.shape[0]:,} BPMs and {wpm.shape[0]} WPMs", flush=True)
 
-    ### load interaction network
-    with open(f"{project_dir}/intermediate/ssM_mhygessi_{model}_R{R}.pkl", 'rb') as f:
+    # load interaction network
+    with open(ssmfile, 'rb') as f:
         network: InteractionNetwork = pickle.load(f)
-    p_network = as_sparse(network.protective)
-    r_network = as_sparse(network.risk)
+    p_network: csr_array = as_sparse(network.protective)
+    r_network: csr_array = as_sparse(network.risk)
     
-    print(f"\t{p_network.shape[0] * p_network.shape[1]:,} entries in the SNP-SNP interaction network")
+    print(f"\t{p_network.shape[0] * p_network.shape[1]:,} entries in the SNP-SNP interaction network", flush=True)
+    
     p_density = p_network.nnz / (p_network.shape[0] * p_network.shape[1]) * 100
-    print(f"\t{p_density:.2f}% of the entries are nonzero in protective network")
+    print(f"\t{p_density:.2f}% of the entries are nonzero in protective network", flush=True)
+    
     r_density = r_network.nnz / (r_network.shape[0] * r_network.shape[1]) * 100
-    print(f"\t{r_density:.2f}% of the entries are nonzero in risk network")
+    print(f"\t{r_density:.2f}% of the entries are nonzero in risk network", flush=True)
 
     if binary_flag:
         if net_density is None:
@@ -833,19 +834,19 @@ def genstats(project_dir, model, R, min_path, binary_flag, net_density, snp_perm
             for name, cutoff in (('protective', p_cutoff), ('risk', r_cutoff)):
                 if cutoff <= 0:
                     print(f"\twarning: net_density={net_density} puts the {name} cutoff at "
-                          f"{cutoff}; keeping all nonzero entries instead of densifying")
+                          f"{cutoff}; keeping all nonzero entries instead of densifying", flush=True)
             p_network = binarize(p_network, 0)
             r_network = binarize(r_network, 0)
             
-    print(f"running genstats on protective network")
-    protective_stats = rungenstats(p_network, bpm, wpm, min_path, binary_flag, snp_perms, n_jobs, n_workers)
+    print(f"running genstats on protective network", flush=True)
+    protective_stats = rungenstats(p_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed)
+
+    print(f"running genstats on risk network", flush=True)
+    risk_stats = rungenstats(r_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed)
     
-    print(f"running genstats on risk network")
-    risk_stats = rungenstats(r_network, bpm, wpm, min_path, binary_flag, snp_perms, n_jobs, n_workers)
-    
-    print()
+    print(flush=True)
     out_obj = GenstatsOut(protective_stats, risk_stats)
     
-    output_file = f"{project_dir}/intermediate/genstats_ssM_mhygessi_{model}_R{R}.pkl"
+    output_file = f"{project_dir}/intermediate/genstats_{ssmfile.split('/')[-1]}"
     with open(output_file, 'wb') as f:
         pickle.dump(out_obj, f)
