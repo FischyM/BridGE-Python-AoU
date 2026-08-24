@@ -205,7 +205,7 @@ def calculate_fdr(sdf, pvdf, pcut, N, type):
     return _frame(rfdr1, type + '1'), _frame(rfdr2, type + '2')
 
 
-def fdrsampleperm(project_dir, ssmFile, pcut, R):
+def fdrsampleperm(project_dir, ssmfile, pcut, R):
     # one entry per network, keyed exactly like the original DataFrame columns
     bpm_data, bpm_pv_data = {}, {}
     wpm_data, wpm_pv_data = {}, {}
@@ -213,7 +213,7 @@ def fdrsampleperm(project_dir, ssmFile, pcut, R):
 
     for i in range(R+1):
         # load genstats file
-        tmp_ssmFile = ssmFile.replace("_R0", "_R" + str(i))
+        tmp_ssmFile = ssmfile.replace("_R0", "_R" + str(i))
         genstats_file = f"{project_dir}/intermediate/genstats_{tmp_ssmFile.split('/')[-1]}"
         with open(genstats_file, "rb") as pklin:
             gs: GenstatsOut = pickle.load(pklin)
