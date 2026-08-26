@@ -23,7 +23,7 @@ def parse_args():
     # common arguments
     p.add_argument('--model', choices=VALID_MODELS, default='combined')
     p.add_argument('--nJobs', dest='n_jobs', type=int, default=10)
-    p.add_argument('--nWorker', dest='n_workers', type=int, default=None)  # None means use all available cores
+    p.add_argument('--nWorker', dest='n_workers', type=int, default=None)  # None will use all available cores
     p.add_argument('--i', type=int, default=-1)
     p.add_argument('--R', dest='r', type=int, default=-1)
     p.add_argument('--densityCutoff', dest='densitycutoff', type=float, default=None)
@@ -144,28 +144,14 @@ def run_compute_fdr(args):
     fdr.fdrsampleperm(args.project_dir, ssmfile, args.pval_cutoff, args.R)
 
 def run_summarize(args):
-    bpmfile = f"{args.project_dir}/intermediate/BPM_WPM_indices.pkl"
-    require_exists(bpmfile)
-
-    snppathwayfile = f"{args.project_dir}/intermediate/{args.snppathwayfile}"
-    require_exists(snppathwayfile)
-
-    # TODO: this should be made into a dataclass that is unambiguous to load?
-    snpgenemappingfile = f"{args.project_dir}/intermediate/snpgenemapping_{args.mappingDistance // 1000}kb.pkl"
-    require_exists(snpgenemappingfile)
-
     if args.ssmfile is None:
         imported = False
         ssmfile = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R0.pkl"
-        resultsfile = f"{args.project_dir}/intermediate/results_ssM_mhygessi_{args.model}_R0.pkl"
     else:
         imported = True
         ssmfile = f"{args.project_dir}/intermediate/{args.ssmfile}"
-        resultsfile = f"{args.project_dir}/intermediate/results_{args.ssmfile}"
-    require_exists(ssmfile, resultsfile)
-
-    cl.collectresults(resultsfile, args.fdrcut, ssmfile, bpmfile,
-                       snppathwayfile, snpgenemappingfile, imported, args.densitycutoff)
+        
+    cl.collectresults(args.project_dir, ssmfile, args.model, args.fdrcut, imported, args.densitycutoff)
 
 MODULES_RUN = {
     'DataProcess': run_data_process,

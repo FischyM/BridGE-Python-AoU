@@ -1,4 +1,4 @@
-import os, pickle
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -10,7 +10,6 @@ from corefuns import pathway_map as pmap
 
 
 FDR_STEP = 0.05
-# TODO: how exactly was this calculated previously? Maybe we don't need this step at all?
 
 def _stack(series):
     """Duplicate a per-module series: rows 0..n-1 protective, n..2n-1 risk.
@@ -59,25 +58,18 @@ def _group_column(groups_per_level, order, label):
     return labels.astype(np.int64).reset_index(drop=True).to_frame('group')
 
 
-def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
-                   snpgenemappingfile, imported_ssm, densitycutoff=None):
+def collectresults(project_dir, ssmfile, model, fdrcut, imported_ssm, densitycutoff):
     """Collects BPM/WPM/PATH results and exports them to an Excel workbook.
 
     Also calls out to driver-gene discovery and redundant-module grouping.
 
     Args:
-        resultsfile (str): Pickle file with the FDRs, empirical p-values and
-            ranksum scores of the BPM/WPM/PATH modules.
-        fdrcut (float): FDR threshold for keeping modules. Must be a multiple
-            of 0.05.
+        project_dir (str): Path to the project directory.
         ssmfile (str): Path to the real-network interaction file (pickle).
-        bpmindfile (str): Pickle file with the SNP ids for each BPM/WPM.
-        snppathwayfile (str): Pickle file mapping SNPs to pathways.
-        snpgenemappingfile (str): Pickle file mapping SNPs to genes.
-        imported_ssm (bool): True when the interaction network was imported
-            rather than computed from genotypes.
-        densitycutoff (float, optional): Network density cutoff, passed through
-            to get_interaction_pair.
+        model (str): Model name, e.g. "combined".
+        fdrcut (float): FDR threshold for keeping modules. Must be a multiple of 0.05.
+        imported_ssm (bool): True when the interaction network was imported rather than computed from genotypes.
+        densitycutoff (float, optional): Network density cutoff, passed through to get_interaction_pair.
 
     Returns:
         str: Path to the written workbook, which contains:
@@ -86,12 +78,12 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
             - output_bpm_table / output_wpm_table / output_path_table: the
               modules below fdrcut with their stats and driver genes.
     """
-    n_levels = _fdr_levels(fdrcut)
-    with open(resultsfile, 'rb') as fh:
-        results: fdrrclass = pickle.load(fh)
-    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(resultsfile)))
-
-    fdrBPM, fdrWPM, fdrPATH = results.fdrbpm2, results.fdrwpm2, results.fdrpath2
+    results_file = f"{project_dir}/intermediate/results_{ssmfile.split('/')[-1]}"
+    with open(results_file, 'rb') as f:
+        results: fdrrclass = pickle.load(f)
+    fdrBPM = results.fdrbpm2
+    fdrWPM = results.fdrwpm2
+    fdrPATH = results.fdrpath2
 
     ind_bpm = fdrBPM[fdrBPM <= fdrcut].dropna()
     ind_wpm = fdrWPM[fdrWPM <= fdrcut].dropna()
@@ -117,9 +109,11 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
     # --- pathway names, sizes, effect direction, driver genes ---------------
     # snppathwayfile is not read here: bridge.py checks it exists and
     # get_interaction_pair loads it (and the geneset it points at) itself.
+    
+    pathway_inds_pkl = f"{project_dir}/intermediate/pathway_indices.pkl"
     if not (ind_bpm.empty and ind_wpm.empty and ind_path.empty):
-        with open(bpmindfile, 'rb') as fh:
-            bpm_ind: bpmindclass = pickle.load(fh)
+        with open(pathway_inds_pkl, 'rb') as f:
+            bpm_ind: bpmindclass = pickle.load(f)
         pathways = bpm_ind.wpm['pathway']
         path_ids = {name: i for i, name in enumerate(pathways)}
         n_bpm = len(bpm_ind.bpm.index)
@@ -130,21 +124,37 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
             path2 = _stack(bpm_ind.bpm['path2names']).loc[ind_bpm.index]
             bpm_size = _stack(bpm_ind.bpm['size']).loc[ind_bpm.index]
             eff_bpm = _effect(ind_bpm, n_bpm, 'eff_bpm')
-
             bpm_path1_drivers, bpm_path2_drivers, _ = gpair.get_interaction_pair(
-                len(ind_bpm), path1, path2, eff_bpm, ssmfile, bpmindfile,
-                snppathwayfile, snpgenemappingfile, path_ids, fdrcut,
-                imported_ssm, densitycutoff)
+                project_dir=project_dir,
+                ssmfile=ssmfile,
+                model=model,
+                n=len(ind_bpm),
+                path1=path1,
+                path2=path2,
+                effects=eff_bpm,
+                path_ids=path_ids,
+                fdrcutoff=fdrcut,
+                imported_ssm=imported_ssm,
+                densitycutoff=densitycutoff,
+                )
 
         if not ind_wpm.empty:
             path_wpm = _stack(pathways).loc[ind_wpm.index]
             wpm_size = _stack(bpm_ind.wpm['size']).loc[ind_wpm.index]
             eff_wpm = _effect(ind_wpm, n_wpm, 'eff_wpm')
-
             _, _, wpm_path_drivers = gpair.get_interaction_pair(
-                len(ind_wpm), path_wpm, path_wpm, eff_wpm, ssmfile, bpmindfile,
-                snppathwayfile, snpgenemappingfile, path_ids, fdrcut,
-                imported_ssm, densitycutoff)
+                project_dir=project_dir,
+                ssmfile=ssmfile,
+                model=model,
+                n=len(ind_wpm),
+                path1=path_wpm,
+                path2=path_wpm,
+                effects=eff_wpm,
+                path_ids=path_ids,
+                fdrcutoff=fdrcut,
+                imported_ssm=imported_ssm,
+                densitycutoff=densitycutoff,
+                )
 
         if not ind_path.empty:
             path_path = _stack(pathways).loc[ind_path.index]
@@ -153,9 +163,15 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
 
     # --- redundancy grouping and the pathway map ----------------------------
     (BPM_nosig_noRD, WPM_nosig_noRD, PATH_nosig_noRD,
-     BPM_groups, WPM_groups, PATH_groups) = cbwr.check_BPM_WPM_redundancy(fdrBPM, fdrWPM, fdrPATH, bpmindfile, fdrcut)
+     BPM_groups, WPM_groups, PATH_groups) = cbwr.check_BPM_WPM_redundancy(
+         fdrBPM=fdrBPM,
+         fdrWPM=fdrWPM,
+         fdrPATH=fdrPATH,
+         bpmindfile=pathway_inds_pkl,
+         FDRcut=fdrcut,
+         )
 
-    pmap.draw_map(project_dir, fdrcut, resultsfile, BPM_groups, WPM_groups, PATH_groups)
+    pmap.draw_map(project_dir, fdrcut, results_file, BPM_groups, WPM_groups, PATH_groups)
 
     # --- output tables ------------------------------------------------------
     # `order` is a stable FDR sort. Group labels are matched to it by module
@@ -216,6 +232,7 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
                       ascending=[True, True, False]).reset_index(drop=True)
 
     # --- summary sheets -----------------------------------------------------
+    n_levels = _fdr_levels(fdrcut)
     header = ['minfdr'] + [ f'fdr{int(round(k * FDR_STEP * 100)):02d}' for k in range(1, n_levels + 1) ]
 
     # One row per module type with results. PATH is checked on its own; the
@@ -236,11 +253,7 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
     output_noRD_discovery_summary = pd.DataFrame(noRD, columns=header, index=index)
 
     # --- write --------------------------------------------------------------
-    results_dir = os.path.join(project_dir, 'results')
-    os.makedirs(results_dir, exist_ok=True)
-    stem = os.path.splitext(os.path.basename(resultsfile))[0]
-    outfile = os.path.join(results_dir, f'output_{stem}.xlsx')
-
+    out_file = f"{project_dir}/results/output_{results_file.split('/')[-1].split(".")[0]}.xlsx"
     sheets = {
         'output_discovery_summary': output_discovery_summary,
         'output_noRD_discovery_summary': output_noRD_discovery_summary,
@@ -248,7 +261,7 @@ def collectresults(resultsfile, fdrcut, ssmfile, bpmindfile, snppathwayfile,
         'output_wpm_table': output_wpm_table,
         'output_path_table': output_path_table,
     }
-    with pd.ExcelWriter(outfile) as writer:
+    with pd.ExcelWriter(out_file) as writer:
         for name, table in sheets.items():
             if table is not None:
                 table.to_excel(writer, sheet_name=name)

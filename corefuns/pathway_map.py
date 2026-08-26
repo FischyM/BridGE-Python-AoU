@@ -27,14 +27,17 @@ from classes import bpmindclass
 
 # TODO: redo the refactoring of this file
 
-def draw_map(project_dir, fdrcut, resultsfile, BPM_group_tmp, WPM_group_tmp, PATH_group_tmp, bpm_limit=20):
+def draw_map(project_dir, fdrcut, ssmfile, BPM_group_tmp, WPM_group_tmp, PATH_group_tmp, bpm_limit=20):
     rcParams['font.family'] = 'sans-serif'
 
-    # load BPMind.pkl file
-    bpm_file = f"{project_dir}/intermediate/BPMind.pkl"
-    with open(bpm_file, 'rb') as fh:
-        bpmind: bpmindclass = pickle.load(fh)
+    pathway_indices_file = f"{project_dir}/intermediate/pathway_indices.pkl"
+    with open(pathway_indices_file, 'rb') as f:
+        bpmind: bpmindclass = pickle.load(f)
 
+    # Module indices here are row POSITIONS in bpm/wpm, not index labels:
+    # bpm's index can have gaps (pathway pairs dropped upstream), so every
+    # lookup below goes through .iloc. Same convention as _bpm_similar() in
+    # check_BPM_WPM_redundancy.
     bpm = bpmind.bpm
     wpm = bpmind.wpm
     wpm_size = wpm.shape[0]
@@ -48,7 +51,7 @@ def draw_map(project_dir, fdrcut, resultsfile, BPM_group_tmp, WPM_group_tmp, PAT
     # Find and add nodes
     to_draw = []
     used_pathways = []
-    ## add WPMs: exactly one from each redundant group
+    # add WPMs: exactly one from each redundant group
     wpm_groups = WPM_group_tmp[-1]
     for g in np.unique(wpm_groups.to_numpy()):
         members = wpm_groups.index[wpm_groups == g]
@@ -56,14 +59,14 @@ def draw_map(project_dir, fdrcut, resultsfile, BPM_group_tmp, WPM_group_tmp, PAT
         risk_type = xid >= wpm_size
         if risk_type:
             xid = xid - wpm_size
-        p1 = wpm['pathway'][xid]
+        p1 = wpm['pathway'].iloc[xid]
         used_pathways.append(p1)
         if risk_type:
-            to_draw.append((p1,p1,'risk'))
+            to_draw.append((p1, p1, 'risk'))
         else:
-            to_draw.append((p1,p1,'protective'))
+            to_draw.append((p1, p1, 'protective'))
 
-    ## add PATHs
+    # add PATHs
     #path_groups = PATH_group_tmp[-1]
     #for g in np.unique(path_groups.to_numpy()):
     #	members = path_groups.index[path_groups == g]
@@ -71,19 +74,19 @@ def draw_map(project_dir, fdrcut, resultsfile, BPM_group_tmp, WPM_group_tmp, PAT
     #	risk_type = xid >= wpm_size
     #	if risk_type:
     #		xid = xid - wpm_size
-    #	p1 = wpm['pathway'][xid]
+    #	p1 = wpm['pathway'].iloc[xid]
     #	used_pathways.append(p1)
     #	if risk_type:
     #		to_draw.append((p1,None,'risk'))
     #	else:
     #		to_draw.append((p1,None,'protective'))
 
-    ## add BPMs based on the bpm limit
+    # add BPMs based on the bpm limit
     used_pathways = np.unique(used_pathways)
     bpm_groups = BPM_group_tmp[-1]
     significant_bpms = bpm_groups.index
     group_ids = np.unique(bpm_groups.to_numpy())
-    ### priority is with WPM-PATH associated pathways
+    # priority is with WPM-PATH associated pathways
     # NOTE: x and y are positions in bpm, so bpm_id is always in 0..bpm_size-1 and
     # this pass can only ever match a protective module. Risk BPMs touching a
     # WPM/PATH pathway are never drawn here. Fixing that means testing both
@@ -101,29 +104,29 @@ def draw_map(project_dir, fdrcut, resultsfile, BPM_group_tmp, WPM_group_tmp, PAT
                 if bpm_id >= bpm_size:
                     risk_type = True
                     bpm_id = bpm_id - bpm_size
-                p1 = bpm['path1names'][bpm_id]
-                p2 = bpm['path2names'][bpm_id]
+                p1 = bpm['path1names'].iloc[bpm_id]
+                p2 = bpm['path2names'].iloc[bpm_id]
                 if risk_type:
-                    to_draw.append((p1,p2,'risk'))
+                    to_draw.append((p1, p2, 'risk'))
                 else:
-                    to_draw.append((p1,p2,'protective'))
+                    to_draw.append((p1, p2, 'protective'))
 
-    ### draw exactly one bpm from each group
+    # draw exactly one bpm from each group
     for g in group_ids[:bpm_limit]:
         members = bpm_groups.index[bpm_groups == g]
         xid = members[0]                      # lowest-FDR member of the group
         risk_type = xid >= bpm_size
         if risk_type:
             xid = xid - bpm_size
-        p1 = bpm['path1names'][xid]
-        p2 = bpm['path2names'][xid]
+        p1 = bpm['path1names'].iloc[xid]
+        p2 = bpm['path2names'].iloc[xid]
         if risk_type:
-            to_draw.append((p1,p2,'risk'))
+            to_draw.append((p1, p2, 'risk'))
         else:
-            to_draw.append((p1,p2,'protective'))
+            to_draw.append((p1, p2, 'protective'))
 
     # Create adjacency matrix
-    ## first find all pathways
+    # first find all pathways
     used_pathways = []
     for t in to_draw:
         p1 = t[0]
@@ -140,40 +143,40 @@ def draw_map(project_dir, fdrcut, resultsfile, BPM_group_tmp, WPM_group_tmp, PAT
         inds[p] = i
         nodes_labels[i] = p
         simple_labels[i] = i
-    ## now create the matrix
-    adj_matrix = np.zeros((len(used_pathways),len(used_pathways)))
+    # now create the matrix
+    adj_matrix = np.zeros((len(used_pathways), len(used_pathways)))
     path_array = []
     for t in to_draw:
         p1 = t[0]
         p2 = t[1]
         int_type = t[2]
         if p2 == None:
-            path_array.append((p1,int_type))
+            path_array.append((p1, int_type))
             continue
         if p1 == p2:
             xid = inds[p1]
             if int_type == 'protective':
-                adj_matrix[xid,xid] = 1
+                adj_matrix[xid, xid] = 1
             else:
                 adj_matrix[xid,xid] = -1
         else:
             xid = inds[p1]
             yid = inds[p2]
             if int_type == 'protective':
-                adj_matrix[xid,yid] = 1
-                adj_matrix[yid,xid] = 1
+                adj_matrix[xid, yid] = 1
+                adj_matrix[yid, xid] = 1
             else:
-                adj_matrix[xid,yid] = -1
-                adj_matrix[yid,xid] = -1
+                adj_matrix[xid, yid] = -1
+                adj_matrix[yid, xid] = -1
 
     if adj_matrix.shape[0] < 3:
         return
 
     # Draw
-    ## Graph(map)
+    # Graph(map)
     G = nx.DiGraph()
-    added_node_flag = np.zeros((len(used_pathways),))
-    ### add PATHs with color
+    added_node_flag = np.zeros((len(used_pathways), ))
+    # add PATHs with color
     for t in path_array:
         p = t[0]
         int_type = t[1]
@@ -186,26 +189,26 @@ def draw_map(project_dir, fdrcut, resultsfile, BPM_group_tmp, WPM_group_tmp, PAT
             G.add_nodes_from([(x_id, {"color": "lightblue"})])
         added_node_flag[x_id] = 1
 
-    ### add all other the nodes
+    # add all other the nodes
     for i in range(len(used_pathways)):
         if added_node_flag[i] == 0:
             p = used_pathways[i]
             G.add_nodes_from([(inds[p], {"color": "lightblue"})])
-    ### add BPMs by adding edges
+    # add BPMs by adding edges
     for i in range(len(used_pathways)):
-        for j in range(i,len(used_pathways)):
+        for j in range(i, len(used_pathways)):
             val = adj_matrix[i,j]
             if val == 1:
                 p1 = used_pathways[i]
                 p2 = used_pathways[j]
-                G.add_edge(inds[p1],inds[p2],color='orange')
-                G.add_edge(inds[p2],inds[p1],color='orange')
+                G.add_edge(inds[p1], inds[p2], color='orange')
+                G.add_edge(inds[p2], inds[p1], color='orange')
             elif val == -1:
                 p1 = used_pathways[i]
                 p2 = used_pathways[j]
-                G.add_edge(inds[p1],inds[p2],color='blue')
-                G.add_edge(inds[p2],inds[p1],color='blue')
-    ### drawing 
+                G.add_edge(inds[p1], inds[p2], color='blue')
+                G.add_edge(inds[p2], inds[p1], color='blue')
+    # drawing 
     fig_title = 'Non-redundant network map with FDR threshold=' + str(int(fdr_th*100))
     nodes = G.nodes
     node_colors = [nodes[u]['color'] for u in nodes]
@@ -214,38 +217,33 @@ def draw_map(project_dir, fdrcut, resultsfile, BPM_group_tmp, WPM_group_tmp, PAT
     plt.rcParams["figure.autolayout"] = True
     plt.rcParams["figure.figsize"] = [12, 12]
     fig1 = plt.figure()
-    pos = nx.spring_layout(G,k=1.5, iterations=200)
-    nx.draw(G, pos, edgelist=edges, edge_color=colors,style='-',node_color=node_colors,nodelist=nodes)
-    nx.draw_networkx_labels(G,pos,labels=simple_labels,font_size=10)
+    pos = nx.spring_layout(G, k=1.5, iterations=200)
+    nx.draw(G, pos, edgelist=edges, edge_color=colors, style='-', node_color=node_colors, nodelist=nodes)
+    nx.draw_networkx_labels(G, pos, labels=simple_labels, font_size=10)
     plt.axis('off')
     axis = plt.gca()
     axis.set_xlim([1.5*x for x in axis.get_xlim()])
     axis.set_ylim([1.5*y for y in axis.get_ylim()])
-    ## add legend
-    legend_elements = [Line2D([0], [0], marker='o', color='w', label='pathway',markerfacecolor='lightblue', markersize=15)]
+    # add legend
+    legend_elements = [Line2D([0], [0], marker='o', color='w', label='pathway', markerfacecolor='lightblue', markersize=15)]
     #legend_elements.append(Line2D([0], [0], marker='o', color='w', label='protective PATH pwathway',markerfacecolor='yellow', markersize=15))
     #legend_elements.append(Line2D([0], [0], marker='o', color='w', label='risk PATH pwathway',markerfacecolor='blue', markersize=15))
     legend_elements.append(Line2D([0], [0], color='orange', lw=4, label='protective interaction'))
     legend_elements.append(Line2D([0], [0], color='blue', lw=4, label='risk interaction'))
-    legend_elements.append(Line2D([0], [0], marker='o', color='w', label='self loops indicate WPM interactions',markerfacecolor='w', markersize=1))
+    legend_elements.append(Line2D([0], [0], marker='o', color='w', label='self loops indicate WPM interactions',
+                                  markerfacecolor='w', markersize=1))
     plt.legend(handles=legend_elements, loc='lower left')
 
-
-
-    ## add Pathway names to the next page
+    # add Pathway names to the next page
     fig2 = plt.figure()
     txt = ''
     for i in range(len(used_pathways)):
-        tmp = str(i)+': '+nodes_labels[i]
-        txt = txt + tmp + '\n'
+        txt = txt + f"{i}: {nodes_labels[i]}\n"
     plt.axis('off')
-    plt.text(0.05,0.05,txt, transform=fig2.transFigure, size=12)
-    # find output file name based on the resultsfile
-    tmp = resultsfile.split('results_')
-    ssmfile = tmp[1]
-    tmp = ssmfile.split('.pkl')
-    ssmfile = tmp[0]
-    pp = PdfPages(project_dir+'/results/network-map-'+ssmfile+'.pdf')
+    plt.text(0.05, 0.05, txt, transform=fig2.transFigure, size=12)
+    
+    # find output file name based on the ssmfile name
+    pp = PdfPages(f"{project_dir}/results/network-map-{ssmfile.split('/')[-1].split('.pkl')[0]}.pdf")
     fig_nums = plt.get_fignums()
     figs = [plt.figure(n) for n in fig_nums]
     for fig in figs:

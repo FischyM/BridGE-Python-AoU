@@ -3,7 +3,7 @@ import os, pickle
 import numpy as np
 import pandas as pd
 
-from classes import InteractionNetwork, bpmindclass, snpsetclass, genesetclass, SNPclass
+from classes import InteractionNetwork, bpmindclass, genesetclass, SNPclass
 from corefuns.HygeCache import _hyge_single
 
 
@@ -87,20 +87,19 @@ def _snp_stat_table(snps, genes, snp_mean_gi, snp_mean_gi_bg, in_int, all_int, n
     return table.sort_values('gi_fold', ascending=False)
 
 
-def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathwayfile,
-                         snp2genefile, path_ids, fdrcutoff, imported_ssm,
-                         densitycutoff=None):
+def get_interaction_pair(project_dir, ssmfile, model, n, path1, path2, effects, path_ids, fdrcutoff, imported_ssm, densitycutoff=None):
     """Finds driver SNPs and genes for a set of BPMs or WPMs.
 
     Whether a row is a BPM or a WPM is decided by comparing path1 and path2.
 
     Args:
+        project_dir (str): Path to the project directory.
+        ssmfile (str): Interaction network pickle.
         n (int): Number of BPMs/WPMs supplied.
         path1 (DataFrame): One column, pathway-1 name per module.
         path2 (DataFrame): One column, pathway-2 name per module. Same as path1
             for WPMs.
         effects (DataFrame): One column of 'risk'/'protective' per module.
-        ssmfile (str): Interaction network pickle.
         bpmfile (str): Pickle with the SNP ids for each BPM/WPM.
         snp2pathwayfile (str): Pickle mapping SNPs to pathways.
         snp2genefile (str): Pickle mapping SNPs to genes.
@@ -120,34 +119,32 @@ def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathway
     Side effect:
         Writes <project_dir>/results/interaction_list_{bpm,wpm}_<model>_<fdr>.xlsx
     """
-    with open(ssmfile, 'rb') as fh:
-        int_network: InteractionNetwork = pickle.load(fh)
+    with open(ssmfile, 'rb') as f:
+        int_network: InteractionNetwork = pickle.load(f)
         
-    with open(bpmfile, 'rb') as fh:
-        bpm_ind: bpmindclass = pickle.load(fh)
+    with open(f"{project_dir}/intermediate/pathway_indices.pkl", 'rb') as f:
+        bpm_ind: bpmindclass = pickle.load(f)
         
-    with open(snp2pathwayfile, 'rb') as fh:
-        snp2path: snpsetclass = pickle.load(fh)
+    with open(f"{project_dir}/intermediate/gene_pathway_mapping.pkl", 'rb') as f:
+        geneset: genesetclass = pickle.load(f)
         
-    with open(snp2path.geneset, 'rb') as fh:
-        geneset: genesetclass = pickle.load(fh)
-        
-    with open(snp2genefile, 'rb') as fh:
-        snp2gene: pd.DataFrame = pickle.load(fh)
-
-    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(snp2pathwayfile)))
+    with open(f"{project_dir}/intermediate/snp_gene_mapping.pkl", 'rb') as f:
+        snp_gene_mapping: pd.DataFrame = pickle.load(f)
+        snp2gene = snp_gene_mapping.sgmatrix
     
-    with open(os.path.join(project_dir, 'intermediate', 'SNPdataAD.pkl'), 'rb') as fh:
-        snpdataAD: SNPclass = pickle.load(fh)
-    
-    with open(os.path.join(project_dir, 'intermediate', 'SNPdataAR.pkl'), 'rb') as fh:
-        snpdataAR: SNPclass = pickle.load(fh)
-    
+    with open(f"{project_dir}/intermediate/snp_data.pkl", 'rb') as f:
+        snp_data: SNPclass = pickle.load(f)
+    G = snp_data.data
+    # convert genotype data to dominant and recessive coding with a simple mapping
+    dom_map = np.array([0, 1, 1])  # dominant:  0->0, 1->1, 2->1 
+    rec_map = np.array([0, 0, 1])  # recessive: 0->0, 1->0, 2->1
+    snpdataAD = dom_map[G]
+    snpdataAR = rec_map[G]
 
 
     # load ld_file
-    # TODO: this needs to be updated with how I create plink.ld file
-    ld_file = os.path.join(project_dir, 'intermediate', 'plink.ld')
+    # TODO: this needs to be updated with how I create a plink.ld file
+    ld_file = f"{project_dir}/intermediate/plink.ld"
     try:
         ld_data = pd.read_csv(ld_file, header=None, index_col=False, sep='\t').to_numpy()
         ld_provided = True
@@ -162,11 +159,10 @@ def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathway
     else:
         if densitycutoff <= 0 or densitycutoff >= 1:
             densitycutoff = 0.1
-        pos_cutoff = np.quantile(int_network.protective, 1 - densitycutoff)
-        neg_cutoff = np.quantile(int_network.risk, 1 - densitycutoff)
+        pos_cutoff = np.quantile(int_network.protective.toarray(), 1 - densitycutoff)
+        neg_cutoff = np.quantile(int_network.risk.toarray(), 1 - densitycutoff)
 
     # Loop-invariant lookups, hoisted out of the per-module loop.
-    model = os.path.splitext(os.path.basename(ssmfile))[0].split('_')[-2]
     pathway_size = bpm_ind.wpm['pathway'].shape[0]
     n_pairs = int(pathway_size * (pathway_size - 1) / 2)
     bpm_ind1, bpm_ind2 = bpm_ind.bpm['ind1'], bpm_ind.bpm['ind2']
@@ -174,15 +170,11 @@ def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathway
     all_genes = snp2gene.columns.values
     all_snps = snp2gene.index.values
 
-    pheno = np.asarray(snpdataAD.pheno)
+    pheno = np.asarray(snp_data.pheno)
     pheno_size = pheno.shape[0]
     res_pheno = np.ones(pheno.shape) - pheno
     pheno_nnz = np.sum(pheno)
     pheno_nz = pheno_size - pheno_nnz
-    # NOTE: deliberately not hoisting snpdataAD.data / snpdataAR.data to numpy
-    # here. That would materialise the whole samples x SNPs genotype matrix for
-    # the duration of the call; the per-module slices below stay small.
-
     bpm_path1_drivers, bpm_path2_drivers, wpm_path_drivers = [], [], []
     path_index = []
     pair_tables = []
@@ -223,8 +215,8 @@ def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathway
             ind2 = bpm_ind2[bpm_id]
 
         ## get snp rsids
-        ind1_snp = snpdataAR.rsid[ind1].values
-        ind2_snp = snpdataAR.rsid[ind2].values
+        ind1_snp = snp_data.varid[ind1].values
+        ind2_snp = snp_data.varid[ind2].values
 
         ## find all genes for the 2 pathways from the geneset(index)
         tmp = geneset.gpmatrix[pathname1]
@@ -246,9 +238,10 @@ def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathway
         ind1 = np.asarray(ind1)
         ind2 = np.asarray(ind2)
 
-        ssm_dis = ssm[ind1, :][:, ind2]
+        ssm_dis = ssm.toarray()[ind1, :][:, ind2]
         if model == 'combined':
-            m_id = max_id[ind1, :][:, ind2]
+            m_id = max_id.toarray()[ind1, :][:, ind2]
+            
         # For a WPM both sides are the same pathway, so only one triangle counts.
         tmp_dis = np.tril(ssm_dis) if p_id1 == p_id2 else ssm_dis
 
@@ -269,10 +262,10 @@ def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathway
         chr2 = np.zeros(interaction_pairs)
         pos1, pos2, ld = [], [], []
 
-        AD1 = snpdataAD.data.iloc[:, ind1].to_numpy()
-        AD2 = snpdataAD.data.iloc[:, ind2].to_numpy()
-        AR1 = snpdataAR.data.iloc[:, ind1].to_numpy()
-        AR2 = snpdataAR.data.iloc[:, ind2].to_numpy()
+        AD1 = snpdataAD[:, ind1]
+        AD2 = snpdataAD[:, ind2]
+        AR1 = snpdataAR[:, ind1]
+        AR2 = snpdataAR[:, ind2]
         snp_pair = np.zeros((pheno_size, interaction_pairs))
 
         for k in range(interaction_pairs):
@@ -280,7 +273,7 @@ def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathway
             tmp_model = model
             if model == 'combined':
                 # disease model with maximum interaction in combined model
-                dm = m_id[i[k], j[k]]
+                dm = m_id[i[k], j[k]]  # type: ignore
                 if dm == 1:
                     tmp_model = 'RR'
                 elif dm == 2:
@@ -326,10 +319,10 @@ def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathway
                     snp_pair[:, k] = np.multiply(AD1[:, i[k]], AR2[:, j[k]])
 
             # find base position and chromosome here
-            chr1[k] = snpdataAD.chr.iloc[ind1[i[k]]]
-            chr2[k] = snpdataAD.chr.iloc[ind2[j[k]]]
-            pos1.append(str(snpdataAD.loc[ind1[i[k]]]['loc']))
-            pos2.append(str(snpdataAD.loc[ind2[j[k]]]['loc']))
+            chr1[k] = snp_data.chrom.iloc[ind1[i[k]]]
+            chr2[k] = snp_data.chrom.iloc[ind2[j[k]]]
+            pos1.append(str(snp_data.pos.iloc[ind1[i[k]]]))
+            pos2.append(str(snp_data.pos.iloc[ind2[j[k]]]))
             if ld_provided and chr1[k] == chr2[k]:
                 ld.append(_format_ld(ld_data[ind1[i[k]], ind2[j[k]]]))
             else:
@@ -391,15 +384,14 @@ def get_interaction_pair(n, path1, path2, effects, ssmfile, bpmfile, snp2pathway
         interaction_table = interaction_table.drop(
             labels=['OR', 'GI type', 'case frequency', 'control frequency'], axis=1)
 
-    results_dir = os.path.join(project_dir, 'results')
-    os.makedirs(results_dir, exist_ok=True)
     kind = 'wpm' if wpm_flag else 'bpm'
-    list_file = os.path.join(
-        results_dir, f'interaction_list_{kind}_{model}_{float(fdrcutoff):.2f}.xlsx')
+    list_file = f'{project_dir}/results/interaction_list_{kind}_{model}_{fdrcutoff:.2f}.xlsx'
 
-    with pd.ExcelWriter(list_file, engine='xlsxwriter') as writer:
+    with pd.ExcelWriter(list_file) as writer:
         interaction_table.to_excel(writer, index=False, sheet_name='Sheet1')
-        number_format = writer.book.add_format({'num_format': '0.000'})
-        writer.sheets['Sheet1'].set_column('L:P', None, number_format)
-
+        ws = writer.sheets['Sheet1']
+        for col in ws.iter_cols(min_col=12, max_col=16, min_row=2):  # L:P, skip header
+            for cell in col:
+                cell.number_format = '0.000'
+                    
     return [bpm_path1_drivers, bpm_path2_drivers, wpm_path_drivers]

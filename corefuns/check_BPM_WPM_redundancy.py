@@ -1,14 +1,14 @@
-import math, pickle
+import math
+import pickle
 
 import numpy as np
 import pandas as pd
 
-from classes import bpmindclass
 from corefuns import bpmsim, pathsim
-
 
 FDR_STEP = 0.05
 SIM_CUTOFF = 0.25
+
 
 def _greedy_groups(fdrs, similar):
     """Assign redundancy groups walking from the most to the least significant module.
@@ -40,16 +40,19 @@ def _greedy_groups(fdrs, similar):
     return pd.Series(labels, index=fdrs.index[rank])
 
 def _bpm_similar(bpmind, local_ind):
-    ind1 = bpmind.bpm['ind1'][local_ind]
-    ind2 = bpmind.bpm['ind2'][local_ind]
+    # local_ind holds row POSITIONS in bpmind.bpm, not index labels: the FDR
+    # frames are laid out in the row order of bpmind.bpm, whose index can have
+    # gaps (pathway pairs dropped upstream). Label lookup would KeyError.
+    ind1 = bpmind.bpm['ind1'].iloc[local_ind]
+    ind2 = bpmind.bpm['ind2'].iloc[local_ind]
     return bpmsim.bpmsim(ind1, ind2, ind1, ind2) >= SIM_CUTOFF
 
 def _wpm_similar(bpmind, local_ind):
-    ind = bpmind.wpm['ind'][local_ind]
+    ind = bpmind.wpm['ind'].iloc[local_ind]
     return bpmsim.bpmsim(ind, ind, ind, ind) >= SIM_CUTOFF
 
 def _path_similar(bpmind, local_ind):
-    return pathsim.pathsim(bpmind.wpm['ind'][local_ind]) >= SIM_CUTOFF
+    return pathsim.pathsim(bpmind.wpm['ind'].iloc[local_ind]) >= SIM_CUTOFF
 
 def _groups_at_threshold(fdr_frame, fdr_col, n_modules, fdrcut, bpmind, similar_fn):
     """Redundancy groups for one module type at one FDR threshold.
@@ -105,7 +108,7 @@ def check_BPM_WPM_redundancy(fdrBPM, fdrWPM, fdrPATH, bpmindfile, FDRcut):
               global FDR rank.
     """
     with open(bpmindfile, 'rb') as fh:
-        bpmind: bpmindclass = pickle.load(fh)
+        bpmind = pickle.load(fh)
 
     n_bpm = len(bpmind.bpm['size'])
     n_wpm = len(bpmind.wpm['size'])
