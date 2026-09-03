@@ -4,11 +4,10 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
-from scipy.sparse import csr_array, coo_array
+from scipy.sparse import csr_array, csc_array, coo_array
 from pgenlib import PgenReader
 
 from classes import SNPclass, genesetclass, snpgeneclass, snpsetclass, bpmindclass
-from filter_pathways import filter_msigdb
 
 
 def plink2pkl(pgen_file, pvar_file, psam_file, output_file):
@@ -39,8 +38,8 @@ def plink2pkl(pgen_file, pvar_file, psam_file, output_file):
         skip = sum(1 for line in f if line.startswith("##"))
     sample_df = pd.read_csv(psam_file, sep="\t", header=0, skiprows=skip)
 
-    print(f"Phenotype composition: {np.unique(sample_df.PHENO1, return_counts=True)}")
-    print(f"Sex composition: {np.unique(sample_df.SEX, return_counts=True)}")
+    print(f"    Phenotype composition: {np.unique(sample_df.PHENO1, return_counts=True)}")
+    print(f"    Sex composition: {np.unique(sample_df.SEX, return_counts=True)}")
 
     # read genotypes with pgenlib
     with PgenReader(pgen_file.encode()) as pgr:
@@ -56,20 +55,23 @@ def plink2pkl(pgen_file, pvar_file, psam_file, output_file):
         
     G = G.T  # samples x variants
     
-    print(f"Genotype matrix composition: {np.unique(G, return_counts=True)}")
-    print(f"    Percentage of zero values: {(G.size - np.count_nonzero(G)) / G.size:.2%}")
-    print(f"    Percentage of missing values: {( np.sum(G == -9) / G.size ):.2%}")
+    print(f"    Genotype matrix composition: {np.unique(G, return_counts=True)}")
+    print(f"        number of samples: {n}, number of variants: {m}")
+    print(f"        Percentage of zero values: {(G.size - np.count_nonzero(G)) / G.size:.2%}")
+    print(f"        Percentage of missing values: {( np.sum(G == -9) / G.size ):.2%}")
     
-    print("Setting any missing values to zero and plotting the resulting MAF distribution.")
+    print("    Setting any missing values to zero")
     G[G == -9] = 0
 
-    maf = np.nanmean(G, axis=0) / 2
-    plt.hist(maf, bins=50)
-    plt.xlabel("MAF"); plt.ylabel("variants"); plt.show()
+    # maf = np.mean(G, axis=0) / 2
+    # plt.hist(maf, bins=50)
+    # plt.xlabel("MAF")
+    # plt.ylabel("variants")
+    # plt.savefig(output_file.replace('.pkl', '.maf.png'))
     
     # Structuring data to be saved into pickle format.
     snp_data = SNPclass(
-        data=G, 
+        data=G,
         varid=variant_df.ID,
         chrom=variant_df['#CHROM'],
         pos=variant_df.POS,
@@ -83,15 +85,51 @@ def plink2pkl(pgen_file, pvar_file, psam_file, output_file):
         pickle.dump(snp_data, f)
 
 
-def msigdb2pkl(symbols_file, entrez_file, min_size, max_size, output_file):
+def msigdb2pkl(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap_cutoff, min_size, max_size, output_file):
     """Convert MsigDB gene set file (.gmt) to pickle file (Python pkl).
         
     Args:
         symbols_file (str): MsigDB gene set file using gene symbols (.symbols.gmt).
-        entrez_file (str): MsigDB gene set file using gene entrez ids (.entrez.gmt).
+        entrez_file (str): MsigDB gene set file using gene entrez ids (.entrez.gmt).        
+        sim_measure (str): The similarity measure to use ("jaccard", "overlap", or "either").
+        jaccard_cutoff (float): Cutoff for the jaccard similarity measure.
+        overlap_cutoff (float): Cutoff for the overlap measure.
+        min_size (int): Minimum size of gene sets to include.
+        max_size (int): Maximum size of gene sets to include.
         output_file (str): Output pickle file for the gene set.
     """
     
+    def jaccard_sim(a, b, inter):
+        return inter / len(a | b) if inter else 0.0
+
+    def overlap_sim(a, b, inter):
+        return inter / min(len(a), len(b)) if inter else 0.0
+
+    def similarity(a, b, sim_measure):
+        inter = len(a & b)
+        if sim_measure == "jaccard":
+            return jaccard_sim(a, b, inter)
+        return overlap_sim(a, b, inter)  # overlap coefficient
+
+    def too_similar(gs, gi, sim_measure, jaccard_cutoff, overlap_cutoff):
+        """True if gi should be dropped for being too similar to already-kept gs."""
+        if sim_measure == "either":
+            inter = len(gs & gi)
+            # OR on the drop condition: dropping requires only one measure to flag
+            # redundancy, not agreement from both. See module docstring.
+            return jaccard_sim(gs, gi, inter) >= jaccard_cutoff or overlap_sim(gs, gi, inter) >= overlap_cutoff
+        return similarity(gs, gi, sim_measure) >= jaccard_cutoff
+    
+    if sim_measure == "jaccard":
+        print(f"    rule: drop a pathway if jaccard >= {jaccard_cutoff} vs. any already-kept pathway")
+        tmp_str = f" using jaccard >= {jaccard_cutoff}"
+    elif sim_measure == "overlap":
+        print(f"    rule: drop a pathway if overlap >= {overlap_cutoff} vs. any already-kept pathway")
+        tmp_str = f" using overlap >= {overlap_cutoff}"
+    else:
+        print(f"    rule: drop a pathway if jaccard >= {jaccard_cutoff} OR overlap >= {overlap_cutoff} vs. any already-kept pathway")
+        tmp_str = f" using jaccard >= {jaccard_cutoff} OR overlap >= {overlap_cutoff}"
+        
     # load pathway files
     symbols_df = pd.read_csv(symbols_file, header=None)
     symbols_df = symbols_df[0].str.split('\t', expand=True, n=2)
@@ -104,13 +142,36 @@ def msigdb2pkl(symbols_file, entrez_file, min_size, max_size, output_file):
     entrez_df['entrez_ids'] = entrez_df['entrez_ids'].str.split('\t')
     
     # filter pathways based in size and similarity
-    if symbols_df['pathway_names'].equals(entrez_df['pathway_names']):
+    if not symbols_df['pathway_names'].equals(entrez_df['pathway_names']):
         sys.exit(
             f"Error: pathway names/order in {symbols_file} and {entrez_file} do not match. "
             "The two files must describe the same gene sets in the same row order."
         )
         
-        
+    # size filter, applied before redundancy filtering (see module docstring).
+    candidates = [row.Index for row in symbols_df.itertuples() if min_size <= len(row.gene_names) <= max_size]
+    print(f"    size filter [{min_size}, {max_size}]: {len(candidates)} / {len(symbols_df)} pathways")
+
+    # greedy redundancy filter, smallest pathway first.
+    ordered = sorted(candidates, key=lambda i: len(symbols_df.loc[i, 'gene_names']))
+    keep_pathway_inds = []  # indices into the original (unsorted) arrays, in size-ascending order
+    keep_gene_sets = []
+    for i in ordered:
+        query_gene_set = set(symbols_df.loc[i, 'gene_names'])
+        keep = True
+        for gene_set in keep_gene_sets:
+            if too_similar(gene_set, query_gene_set, sim_measure, jaccard_cutoff, overlap_cutoff):
+                keep = False
+                break
+        if keep:
+            keep_pathway_inds.append(i)
+            keep_gene_sets.append(query_gene_set)
+    print(f"    kept {len(keep_pathway_inds)} / {len(candidates)} size-filtered pathways{tmp_str}")
+    
+    # filter the original dataframes to only include the kept pathways
+    symbols_df = symbols_df.loc[keep_pathway_inds].reset_index(drop=True)
+    entrez_df = entrez_df.loc[keep_pathway_inds].reset_index(drop=True)
+    
     # make gene by pathway binary matrix
     pathway_list = symbols_df['pathway_names'].tolist()
     gene_list = list(set([gene for sublist in symbols_df['gene_names'].tolist() for gene in sublist]))
@@ -135,6 +196,14 @@ def msigdb2pkl(symbols_file, entrez_file, min_size, max_size, output_file):
     geneset = genesetclass(entrezids=symboldict, gpmatrix=gene_pathway_df)
     with open(output_file, 'wb') as f:
         pickle.dump(geneset, f)
+    
+    # save filtered dataframes to csv for inspection
+    with open(symbols_file.replace(".symbols.gmt", ".filtered.symbols.gmt"), 'w') as f:
+        for _, row in symbols_df.iterrows():
+            f.write(f"{row['pathway_names']}\t{row['url']}\t" + "\t".join(row['gene_names']) + "\n")
+    with open(entrez_file.replace(".entrez.gmt", ".filtered.entrez.gmt"), 'w') as f:
+        for _, row in entrez_df.iterrows():
+            f.write(f"{row['pathway_names']}\t{row['url']}\t" + "\t".join(map(str, row['entrez_ids'])) + "\n")
 
 
 def mapsnp2gene(pvar_file, gene_annotation_file, mapping_distance, output_file):
@@ -215,8 +284,6 @@ def mapsnp2gene(pvar_file, gene_annotation_file, mapping_distance, output_file):
     with open(output_file, 'wb') as f:
         pickle.dump(snp_gene_class, f)
     
-    return snp_gene_df
-    
 
 def snppathway(project_dir, min_path, max_path, output_file):
     """Creates a snp-to-pathway mapping.
@@ -265,9 +332,8 @@ def snppathway(project_dir, min_path, max_path, output_file):
     tmp_sgp = sg_sparse.dot(gp_sparse).toarray()
 
     # after matrix multiplication (dot product) there will be values greater than 1
-    # set data type to bool and then back to int????
-    # tmp_sgp = tmp_sgp.astype(int)
-    tmp_sgp_df = pd.DataFrame(tmp_sgp,
+    # set data type to bool and then back to int
+    tmp_sgp_df = pd.DataFrame(tmp_sgp.astype(bool).astype(int),
                                 index=pd.Series(tmp2_sgm.index, name='varid'),
                                 columns=pd.Series(tmp2_gpm.columns, name='pathway'))
 
@@ -295,8 +361,168 @@ def snppathway(project_dir, min_path, max_path, output_file):
     with open(output_file, 'wb') as f:
         pickle.dump(snp_set, f)
 
-
 def bpmind(project_dir, min_path, output_file):
+    """Extracts SNP indices for BPM/WPM sets.
+
+    Option C: computes the surviving pathway pairs and their sizes with Option B's
+    sparse-matmul core, then expands them into the original bpm format in a second
+    pass. Output is byte-identical to the original, including index labels.
+
+    The phase split means the exact memory cost of the ind1/ind2 columns is known
+    before a single list is allocated.
+    """
+
+    # Reading in data files
+    with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
+        snp_set: snpsetclass = pickle.load(f)
+
+    # Retrieving pathways list from snp_set
+    pathways = snp_set.pathways
+    snpmat = snp_set.spmatrix
+
+    n_snp, n_path = snpmat.shape
+
+    # Single conversion of the dense frame to a sparse column matrix.
+    S = csc_array((snpmat.to_numpy() != 0).astype(np.int32))
+    S.sort_indices()
+
+    # Finding WPM indices -- the per-column SNP row indices are the CSC structure.
+    WPMind = [S.indices[S.indptr[j]:S.indptr[j + 1]] for j in range(n_path)]
+    wpmdata = {
+        'pathway': pathways.index,
+        'indsize': pathways.values,
+        'ind': [a.tolist() for a in WPMind],
+        'size': ((pathways.to_numpy() * pathways.to_numpy()) - pathways.to_numpy()),
+        }
+    wpm = pd.DataFrame(wpmdata)
+
+    # Pathway sizes as counted in the matrix, not pathways.values.
+    colsum = np.diff(S.indptr).astype(np.int64)
+
+    # All pairwise intersection counts in one sparse matmul: C[i, j] = |P_i & P_j|.
+    C = (S.T @ S).tocsr()
+    C.sort_indices()
+
+    # Phase 1: surviving pairs and their sizes. No per-pair Python iteration.
+    path1_blocks, path2_blocks, s1_blocks, s2_blocks = [], [], [], []
+
+    for i in range(n_path - 1):
+        j = np.arange(i + 1, n_path, dtype=np.int32)
+
+        lo, hi = C.indptr[i], C.indptr[i + 1]
+        cols = C.indices[lo:hi]
+        k0 = np.searchsorted(cols, i + 1)
+        ov = np.zeros(j.size, dtype=np.int32)
+        ov[cols[k0:] - (i + 1)] = C.data[lo + k0:hi]
+
+        ind1size = colsum[i] - ov
+        ind2size = colsum[j] - ov
+
+        # filter out pathways that are too small after removing SNPs that are in
+        # both pathways of a BPM
+        keep = (ind1size >= min_path) & (ind2size >= min_path)
+        n_keep = int(keep.sum())
+        if n_keep == 0:
+            continue
+
+        path1_blocks.append(np.full(n_keep, i, dtype=np.int32))
+        path2_blocks.append(j[keep])
+        s1_blocks.append(ind1size[keep].astype(np.int32))
+        s2_blocks.append(ind2size[keep].astype(np.int32))
+
+    orig_size = n_path * (n_path - 1) // 2
+
+    if path1_blocks:
+        pairs = {
+            'path1': np.concatenate(path1_blocks),
+            'path2': np.concatenate(path2_blocks),
+            'ind1size': np.concatenate(s1_blocks),
+            'ind2size': np.concatenate(s2_blocks),
+            }
+    else:
+        empty = np.array([], dtype=np.int32)
+        pairs = {'path1': empty, 'path2': empty, 'ind1size': empty, 'ind2size': empty}
+
+    n_bpm = len(pairs['path1'])
+    print(f"    Total number of WPMs: {len(wpm)}")
+    print(f"    Total number of BPMs: {orig_size}")
+    print(f"    Total BPMs filtered with min_path={min_path}: {orig_size - n_bpm}")
+    # print(f"    ind1/ind2 columns will need {materialized_bytes(pairs) / 2**30:.1f} GB")
+
+    # Phase 2: expand into the original bpm format.
+    bpm = materialize_bpm(pairs, wpm, n_path, n_snp)
+
+    # Saving bpmind data to pickle file.
+    bpmobj = bpmindclass(bpm=bpm, wpm=wpm)
+    with open(output_file, 'wb') as f:
+        pickle.dump(bpmobj, f)
+
+def materialized_bytes(pairs):
+    """Exact Python memory the ind1/ind2 columns will occupy, before building them.
+
+    A list of n ints costs 56 bytes for the list plus 8 (slot) + 28 (int object)
+    per element. Only computable because phase 1 already produced the sizes.
+    """
+    n_ints = int(pairs['ind1size'].sum()) + int(pairs['ind2size'].sum())
+    return 2 * 56 * len(pairs['path1']) + 36 * n_ints
+
+def materialize_bpm(pairs, wpm, n_path, n_snp, start=0, stop=None):
+    """Expand rows [start, stop) of the phase-1 pair table into the original format.
+
+    Rows arrive grouped by path1, so the pathway-1 membership mask is set once per
+    pathway rather than once per pair. Concatenating the frames from consecutive
+    [start, stop) slices reproduces the full frame exactly.
+    """
+    stop = len(pairs['path1']) if stop is None else stop
+
+    i_col = pairs['path1'][start:stop].astype(np.int64)
+    j_col = pairs['path2'][start:stop].astype(np.int64)
+    ind1size = pairs['ind1size'][start:stop].astype(np.int64)
+    ind2size = pairs['ind2size'][start:stop].astype(np.int64)
+
+    names = wpm['pathway'].to_numpy()
+    ind_arrays = [np.asarray(a, dtype=np.int64) for a in wpm['ind']]
+
+    BPMind1, BPMind2 = [], []
+    mask_i = np.zeros(n_snp, dtype=bool)
+    mask_j = np.zeros(n_snp, dtype=bool)
+
+    if len(i_col):
+        starts = np.flatnonzero(np.r_[True, i_col[1:] != i_col[:-1]])
+        ends = np.r_[starts[1:], len(i_col)]
+    else:
+        starts = ends = np.array([], dtype=np.int64)
+
+    for lo, hi in zip(starts, ends):
+        p1 = ind_arrays[i_col[lo]]
+        mask_i[p1] = True
+
+        for k in range(lo, hi):
+            p2 = ind_arrays[j_col[k]]
+            mask_j[p2] = True
+
+            # snps in pathway 1 but not in pathway 2
+            BPMind1.append(p1[~mask_j[p1]].tolist())
+            # snps in pathway 2 but not in pathway 1
+            BPMind2.append(p2[~mask_i[p2]].tolist())
+
+            mask_j[p2] = False
+
+        mask_i[p1] = False
+
+    # Row-major position in the full upper triangle, reproducing the index labels
+    # the original's boolean filter leaves behind.
+    pos = i_col * (n_path - 1) - (i_col * (i_col - 1)) // 2 + (j_col - i_col - 1)
+
+    # Orienting bpm data and converting to a dataframe.
+    bpmdata = {
+        'path1names': names[i_col], 'ind1': BPMind1, 'ind1size': ind1size,
+        'path2names': names[j_col], 'ind2': BPMind2, 'ind2size': ind2size,
+        'size': ind1size * ind2size,
+        }
+    return pd.DataFrame(bpmdata, index=pos)
+
+def bpmind_old(project_dir, min_path, output_file):
     """Exctracts SNP indices for BPM/WPM sets."""
 
     # Reading in data files
@@ -356,6 +582,106 @@ def bpmind(project_dir, min_path, output_file):
     
     # filter out pathways that are too small after removing SNPs that are in both pathways of a BPM
     bpm = bpm[(bpm['ind1size'] >= min_path) & (bpm['ind2size'] >= min_path)]
+    print(f"    Total number of WPMs: {len(wpm)}")
+    print(f"    Total number of BPMs: {orig_size}")
+    print(f"    Total BPMs filtered with min_path={min_path}: {orig_size - len(bpm)}")
+
+    # Saving bpmind data to pickle file.
+    bpmobj = bpmindclass(bpm=bpm, wpm=wpm)
+    with open(output_file, 'wb') as f:
+        pickle.dump(bpmobj, f)
+
+
+def bpmind_optimized(project_dir, min_path, output_file):
+    """Extracts SNP indices for BPM/WPM sets.
+
+    Option B: stores per-pathway SNP indices once (in wpm) and only pathway-pair
+    positions plus sizes in bpm. ind1/ind2 are reconstructed on demand via
+    bpm_pair_indices(). Memory drops from O(n_path^2 * mean_pathway_size) to
+    O(n_path^2) small integers, and the per-pair Python loop disappears entirely.
+    
+    NOTE: there could be a tangible speedup by implementing this logic in genstats_perm.py
+    if someone wanted to try speeding that module up.
+    """
+
+    # Reading in data files
+    with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
+        snp_set: snpsetclass = pickle.load(f)
+
+    # Retrieving pathways list from snp_set
+    pathways = snp_set.pathways
+    snpmat = snp_set.spmatrix
+
+    n_path = snpmat.shape[1]
+
+    # Single conversion of the dense frame to a sparse column matrix.
+    S = csc_array((snpmat.to_numpy() != 0).astype(np.int32))
+    S.sort_indices()
+
+    # Finding WPM indices -- these are now the only stored SNP index lists.
+    WPMind = [S.indices[S.indptr[j]:S.indptr[j + 1]] for j in range(n_path)]
+    wpmdata = {
+        'pathway': pathways.index,
+        'indsize': pathways.values,
+        'ind': [a.tolist() for a in WPMind],
+        'size': ((pathways.to_numpy() * pathways.to_numpy()) - pathways.to_numpy()),
+        }
+    wpm = pd.DataFrame(wpmdata)
+
+    # Pathway sizes as counted in the matrix, not pathways.values.
+    colsum = np.diff(S.indptr).astype(np.int64)
+
+    # All pairwise intersection counts in one sparse matmul: C[i, j] = |P_i & P_j|.
+    C = (S.T @ S).tocsr()
+    C.sort_indices()
+
+    # Finding BPM pairs and sizes. No per-pair Python iteration.
+    path1_blocks, path2_blocks, s1_blocks, s2_blocks = [], [], [], []
+
+    for i in range(n_path - 1):
+        j = np.arange(i + 1, n_path, dtype=np.int32)
+
+        lo, hi = C.indptr[i], C.indptr[i + 1]
+        cols = C.indices[lo:hi]
+        k0 = np.searchsorted(cols, i + 1)
+        ov = np.zeros(j.size, dtype=np.int32)
+        ov[cols[k0:] - (i + 1)] = C.data[lo + k0:hi]
+
+        ind1size = colsum[i] - ov
+        ind2size = colsum[j] - ov
+
+        # filter out pathways that are too small after removing SNPs that are in
+        # both pathways of a BPM
+        keep = (ind1size >= min_path) & (ind2size >= min_path)
+        n_keep = int(keep.sum())
+        if n_keep == 0:
+            continue
+
+        path1_blocks.append(np.full(n_keep, i, dtype=np.int32))
+        path2_blocks.append(j[keep])
+        s1_blocks.append(ind1size[keep].astype(np.int32))
+        s2_blocks.append(ind2size[keep].astype(np.int32))
+
+    orig_size = n_path * (n_path - 1) // 2
+
+    if path1_blocks:
+        path1 = np.concatenate(path1_blocks)
+        path2 = np.concatenate(path2_blocks)
+        ind1size = np.concatenate(s1_blocks)
+        ind2size = np.concatenate(s2_blocks)
+    else:
+        path1 = path2 = np.array([], dtype=np.int32)
+        ind1size = ind2size = np.array([], dtype=np.int32)
+
+    # Orienting bpm/wpm data and converting to dataframes. path1/path2 are
+    # positional indices into wpm; names come from wpm['pathway'].
+    bpmdata = {
+        'path1': path1, 'ind1size': ind1size,
+        'path2': path2, 'ind2size': ind2size,
+        'size': ind1size.astype(np.int64) * ind2size.astype(np.int64),
+        }
+    bpm = pd.DataFrame(bpmdata)
+
     print(f"Total number of BPMs: {orig_size}")
     print(f"Total BPMs filtered with min_path={min_path}: {orig_size - len(bpm)}")
 
@@ -363,3 +689,58 @@ def bpmind(project_dir, min_path, output_file):
     bpmobj = bpmindclass(bpm=bpm, wpm=wpm)
     with open(output_file, 'wb') as f:
         pickle.dump(bpmobj, f)
+
+
+# ---------------------------------------------------------------------------
+# Downstream accessors. These replace direct reads of bpm['ind1'] / bpm['ind2'].
+# ---------------------------------------------------------------------------
+
+def bpm_pair_indices(bpm, wpm, row):
+    """Reconstruct (ind1, ind2) for one BPM row as sorted int arrays.
+
+    O(mean_pathway_size) per call. Equivalent to the original
+    bpm['ind1'].iloc[row] / bpm['ind2'].iloc[row].
+    """
+    # dtype is pinned because np.asarray([]) returns float64, which silently
+    # yields float index arrays for empty pathways.
+    p1 = np.asarray(wpm['ind'].iat[int(bpm['path1'].iat[row])], dtype=np.int64)
+    p2 = np.asarray(wpm['ind'].iat[int(bpm['path2'].iat[row])], dtype=np.int64)
+    ind1 = np.setdiff1d(p1, p2, assume_unique=True)
+    ind2 = np.setdiff1d(p2, p1, assume_unique=True)
+    return ind1, ind2
+
+
+def bpm_pair_names(bpm, wpm):
+    """Recover the original path1names / path2names columns as numpy arrays."""
+    names = wpm['pathway'].to_numpy()
+    return names[bpm['path1'].to_numpy()], names[bpm['path2'].to_numpy()]
+
+
+def bpm_indices_batched(bpm, wpm, rows, n_snp):
+    """Reconstruct ind1/ind2 for many rows, reusing one scratch mask.
+
+    Faster than repeated bpm_pair_indices when iterating a block of BPMs, which
+    is the access pattern in genstats_perm.py. Returns two lists of int arrays.
+    """
+    # dtype is pinned because np.asarray([]) returns float64, which cannot be
+    # used to index the scratch mask for an empty pathway.
+    ind_arrays = [np.asarray(a, dtype=np.int64) for a in wpm['ind']]
+    p1_col = bpm['path1'].to_numpy()
+    p2_col = bpm['path2'].to_numpy()
+
+    mask = np.zeros(n_snp, dtype=bool)
+    out1, out2 = [], []
+
+    for r in rows:
+        p1 = ind_arrays[p1_col[r]]
+        p2 = ind_arrays[p2_col[r]]
+
+        mask[p2] = True
+        out1.append(p1[~mask[p1]])
+        mask[p2] = False
+
+        mask[p1] = True
+        out2.append(p2[~mask[p2]])
+        mask[p1] = False
+
+    return out1, out2

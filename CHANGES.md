@@ -211,7 +211,7 @@ Since AoU has diverse ancestry samples, we fill in any missing variant values (w
   - This implementation's result matches the older version.
   - spmatrix was refactored so that there are no values larger than 1, these checks aren't needed anymore
   - wpmdata size does not divide by two like you would for an n choose k problem where k=2, however, this is accounted for later on.
-  - TODO: use min_path to remove pathways that are too small that would have been removed anyways in ComputeStats.
+  - use min_path to remove pathways that are too small that would have been removed anyways in ComputeStats.
 - imputesnp.py
   - no longer needed as imputation should be done outside of BridGE, as detailed in my AoU repo. This is to account for the fact that the All of Us data has a diverse ancestry and basic imputation would only work for samples of the same ancestry.
 - mapsnp2gene.py
@@ -223,7 +223,7 @@ Since AoU has diverse ancestry samples, we fill in any missing variant values (w
   - This implementation's result matches the older version.
   - jagged csv files are read differently. I keep 3 columns, of which, the gene name column holds a list of genes that are in each pathway.
   - a binary (boolean) matrix is created and used that fills entries array-wise based on genes in each pathway.
-  - TODO: Implement Jaccard dissimilarity filtering criteria to the pathways.
+  - Implemented Jaccard and overlap filtering criteria to the pathways.
 - snppathway.py
   - This implementation's result matches the older version.
   - speed improvements with numpy array broadcasting when testing if pathway size is between 10 and 300

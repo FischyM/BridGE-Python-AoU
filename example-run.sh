@@ -97,16 +97,24 @@ remove_outlier.sh \
 
 
 # Preprocess the data to remove related samples, match cases to controls, and prune SNPs for LD.
-preprocess.sh example/preprocess/gwas_subset.hg38.rmoutlier example/intermediate/gwas_final
-
+preprocess.sh example/preprocess/gwas_subset.hg38.rmoutlier example/raw/gwas_final
 
 # Run BridGE
-python bridge.py --projectDir=example --job=DataProcess --plinkFile=gwas_final --geneAnnotation=glist-hg38 --genesets=c2.cp.v7.1
+python bridge.py --projectDir=example --module=DataProcess \
+    --plinkFile=gwas_final \
+    --geneAnnotation=glist-hg38 \
+    --geneSets=c2.cp.v2026.1.Hs \
+    --simMeasure=either \
+    --jaccardCutoff=0.33 \
+    --overlapCutoff=0.5
+# transfer the preprocessed genotype data and filtered gene sets over to BridGE 2.0 to test
+plink2 --pfile example/raw/gwas_final --make-bed --out ../BridGE-Python/testdata/intermediate/gwas_final.new
+cp example/raw/c2.cp.v2026.1.Hs.* ../BridGE-Python/testdata/raw/
 
-python bridge.py --projectDir=example --job=ComputeInteraction --model=combined --nWorker=30 --R=5
+python bridge.py --projectDir=example --module=ComputeInteraction --model=combined --nWorker=30 --R=5
 
-python bridge.py --projectDir=example --job=ComputeStats --model=combined --nWorker=10 --snpPerms=100 --minPath=10 --R=5
+python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=10 --snpPerms=100 --minPath=10 --R=5
 
-python bridge.py --projectDir=example --job=ComputeFDR --model=combined --pvalueCutoff=0.05 --minPath=10 --samplePerms=5
+python bridge.py --projectDir=example --module=ComputeFDR --model=combined --pvalueCutoff=0.05 --minPath=10 --samplePerms=5
 
-python bridge.py --projectDir=example --job=Summarize --model=combined --fdrcut=0.25 --snpPathFile=snp_pathway_min10_max300.pkl
+python bridge.py --projectDir=example --module=Summarize --model=combined --fdrcut=0.25 --snpPathFile=snp_pathway_min10_max300.pkl
