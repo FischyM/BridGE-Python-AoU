@@ -20,38 +20,31 @@ mkdir -p example/preprocess
 mkdir -p example/intermediate
 mkdir -p example/results
 
-
 # download example data
-cd example/raw
-
-wget https://zenodo.org/record/8067407/files/gwas_subset.bed
-wget https://zenodo.org/record/8067407/files/gwas_subset.bim
-wget https://zenodo.org/record/8067407/files/gwas_subset.fam
-
-wget https://zenodo.org/records/8067407/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.bed
-wget https://zenodo.org/records/8067407/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.bim
-wget https://zenodo.org/records/8067407/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.fam
-
-wget https://zenodo.org/records/8067407/files/allpopid.txt
-
-cd ../..
-
+wget https://zenodo.org/record/8067407/files/gwas_subset.bed -P example/raw
+wget https://zenodo.org/record/8067407/files/gwas_subset.bim -P example/raw
+wget https://zenodo.org/record/8067407/files/gwas_subset.fam -P example/raw
+wget https://zenodo.org/records/8067407/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.bed -P example/raw
+wget https://zenodo.org/records/8067407/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.bim -P example/raw
+wget https://zenodo.org/records/8067407/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.fam -P example/raw
+wget https://zenodo.org/records/8067407/files/allpopid.txt -P example/raw
 
 # example data needs to be converted to GRCh38. 
 # This should always be done first to avoid inconsistencies with genome builds.
 # download liftover and chain file for lifting data from GRCh37 to GRCh38
-cd example/preprocess
+wget https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/liftOver -P example/preprocess
+wget https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz -P example/preprocess
+chmod +x example/preprocess/liftOver
 
-wget https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/liftOver
-chmod +x liftOver
-wget https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz
 
-cd ../..
+conda activate bridge-aou
+cd BridGE-Python-AoU/
+source setup.sh
 
 
 # convert data to pgen format
-./plink2 --bfile example/raw/gwas_subset --make-pgen --out example/preprocess/gwas_subset
-./plink2 --bfile example/raw/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid --make-pgen --out example/preprocess/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid
+plink2 --bfile example/raw/gwas_subset --make-pgen --out example/preprocess/gwas_subset
+plink2 --bfile example/raw/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid --make-pgen --out example/preprocess/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid
 
 # then, convert .pvar file to .bed file, run liftover, and convert back to .pvar file
 python liftover_helper.py extract-bed \
@@ -59,9 +52,9 @@ python liftover_helper.py extract-bed \
     --bed-out=example/preprocess/prelift.bed \
     --skipped-out=example/preprocess/prelift.skipped.txt
 # liftover the BED file to GRCh38
-./example/raw/liftOver \
+./example/preprocess/liftOver \
     example/preprocess/prelift.bed \
-    example/raw/hg19ToHg38.over.chain.gz \
+    example/preprocess/hg19ToHg38.over.chain.gz \
     example/preprocess/lifted.hg38.mapped.bed \
     example/preprocess/lifted.hg38.unmapped.bed
 # parse liftover output
@@ -74,17 +67,20 @@ python liftover_helper.py parse-results \
     --pos-update-out=example/preprocess/lifted.hg38.pos_update.txt \
     --removed-log-out=example/preprocess/lifted.hg38.removed.log
 # update the .pvar file with the new coordinates
-./plink2 --pfile example/preprocess/gwas_subset \
+plink2 --pfile example/preprocess/gwas_subset \
     --extract example/preprocess/lifted.hg38.keep_ids.txt \
     --update-chr example/preprocess/lifted.hg38.chr_update.txt \
     --update-map example/preprocess/lifted.hg38.pos_update.txt \
     --sort-vars --make-pgen \
     --out example/preprocess/gwas_subset.hg38
+# save in plink bed format to run with BridGE 2.0
+plink2 --pfile example/preprocess/gwas_subset.hg38 --autosome --make-bed --out ../BridGE-Python/testdata/raw/gwas_subset.hg38
+
 
 
 # check the study population against 1000 Genomes reference populations.
 # writes example/intermediate/gwas_subset_prj1000.{eigenvec,eigenval,popid.txt,pdf}
-./example-check_population.sh \
+check_population.sh \
     example/preprocess/gwas_subset.hg38 \
     example/preprocess/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid \
     example/raw/allpopid.txt \
@@ -93,7 +89,7 @@ python liftover_helper.py parse-results \
 # drop samples that sit outside the intended cluster. The four cutoffs bound
 # PC1 then PC2 and are read off example/intermediate/gwas_subset_prj1000.pdf;
 # adjust it for your own data.
-./example-remove_outlier.sh \
+remove_outlier.sh \
     example/preprocess/gwas_subset.hg38 \
     example/preprocess/gwas_subset_prj1000.eigenvec \
     example/preprocess/gwas_subset.hg38.rmoutlier \
@@ -101,7 +97,7 @@ python liftover_helper.py parse-results \
 
 
 # Preprocess the data to remove related samples, match cases to controls, and prune SNPs for LD.
-./example-preprocess.sh example/preprocess/gwas_subset.hg38.rmoutlier example/intermediate/gwas_final
+preprocess.sh example/preprocess/gwas_subset.hg38.rmoutlier example/intermediate/gwas_final
 
 
 # Run BridGE

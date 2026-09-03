@@ -187,7 +187,7 @@ def main():
     print(f"cases below --ratio      : {len(short)}"
           f"{' (dropped)' if args.drop_partial else ' (kept, partially matched)'}")
     print(f"match distance mean/max  : {dists.mean():.4f} / {dists.max():.4f}")
-    print(f"retained -> {args.out}  : {len(keep)}")
+    print(f"retained -> {args.out}  : {len(keep)}\n\n")
 
 if __name__ == "__main__":
     main()

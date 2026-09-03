@@ -24,7 +24,7 @@ set -o pipefail
 #    .missnp output and re-merging in a loop.
 #
 # Usage:
-#   ./example-check_population.sh <studyPfile> <refPfile> <popIDFile> <outPrefix> [pops]
+#   ./check_population.sh <studyPfile> <refPfile> <popIDFile> <outPrefix> [pops]
 #
 #   studyPfile  study fileset prefix (.pgen/.pvar/.psam)
 #   refPfile    1000 Genomes fileset prefix
@@ -48,8 +48,6 @@ set -o pipefail
 #   <outPrefix>.popid.txt   one-hot population membership, same rows
 #   <outPrefix>.pdf         study cohort plotted against the reference panels
 
-PLINK2=${PLINK2:-./plink2}
-
 studyPfile=$1
 refPfile=$2
 popIDFile=$3
@@ -63,15 +61,13 @@ ld_r2=0.2           # maximum squared correlation between retained variants
 npcs=10             # PCs to compute; the first two are plotted. Decrease this to save computation time.
 legendPos=best      # southeast, southwest, northeast, northwest or best
 
-mkdir -p "$(dirname "${out}")"
-
 
 # 1. reference samples in the requested populations, and the study variant IDs
-python3 check_population.py ref-samples \
+python -m check_population ref-samples \
     --ref-psam "${refPfile}.psam" --pop-id "${popIDFile}" --pops "${pops}" \
     --out "${out}.ref.id"
 
-python3 check_population.py variant-ids \
+python -m check_population variant-ids \
     --pvar "${studyPfile}.pvar" --out "${out}.study.snps"
 
 
@@ -79,26 +75,26 @@ python3 check_population.py variant-ids \
 #    only pass over the full reference genotypes, so everything that can be
 #    filtered here is: --keep-founders replaces plink 1.9's --filter-founders
 #    and --max-alleles 2 replaces --biallelic-only strict.
-${PLINK2} --pfile "${refPfile}" \
+plink2 --pfile "${refPfile}" \
     --keep "${out}.ref.id" --keep-founders \
     --extract "${out}.study.snps" --max-alleles 2 --maf ${maf} \
     --make-pgen --out "${out}.ref" --silent
 
 
 # 3. variants the two panels agree on: same ID, same allele pair
-python3 check_population.py shared-variants \
+python -m check_population shared-variants \
     --study-pvar "${studyPfile}.pvar" --ref-pvar "${out}.ref.pvar" \
-    --out "${out}.shared.snps"
+    --out "${out}.shared.snps" --silent
 
 
 # 4. PCA needs variants that are not too correlated with each other
-${PLINK2} --pfile "${out}.ref" --extract "${out}.shared.snps" \
+plink2 --pfile "${out}.ref" --extract "${out}.shared.snps" \
     --indep-pairwise ${ld_window} ${ld_step} ${ld_r2} --out "${out}.prune" --silent
 
 
 # 5. define the population axes from the reference panel. --freq counts gives
 #    --score the reference allele frequencies to standardise both cohorts by.
-${PLINK2} --pfile "${out}.ref" --extract "${out}.prune.prune.in" \
+plink2 --pfile "${out}.ref" --extract "${out}.prune.prune.in" \
     --freq counts --pca allele-wts ${npcs} --out "${out}.refpca" --silent
 
 
@@ -113,17 +109,17 @@ for cohort in ref study; do
         ref)   pfile="${out}.ref" ;;
         study) pfile="${studyPfile}" ;;
     esac
-    ${PLINK2} --pfile "${pfile}" --extract "${out}.prune.prune.in" \
+    plink2 --pfile "${pfile}" --extract "${out}.prune.prune.in" \
         --read-freq "${out}.refpca.acount" \
         --score "${out}.refpca.eigenvec.allele" 2 6 header-read \
                 no-mean-imputation variance-standardize \
         --score-col-nums ${score_cols} \
-        --out "${out}.${cohort}proj"
+        --out "${out}.${cohort}proj" --silent
 done
 
 
 # 7. one coordinate table and one population-label file, written together
-python3 check_population.py combine \
+python -m check_population combine \
     --ref-sscore "${out}.refproj.sscore" \
     --study-sscore "${out}.studyproj.sscore" \
     --pop-id "${popIDFile}" --pops "${pops}" --npcs ${npcs} \
@@ -133,8 +129,7 @@ cp "${out}.refpca.eigenval" "${out}.eigenval"
 
 
 # 8. plot the study cohort against the reference populations
-python3 scripts/plotmds.py "${out}.eigenvec" "${out}.popid.txt" "${legendPos}" "${out}"
-
+python -m plotmds "${out}.eigenvec" "${out}.popid.txt" "${legendPos}" "${out}"
 
 rm -f "${out}.ref.id" "${out}.study.snps" "${out}.shared.snps" \
       "${out}.prune."{prune.in,prune.out,log} \

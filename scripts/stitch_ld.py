@@ -42,14 +42,14 @@ def main():
     sparse_array = sps.block_diag(sparse_array_list, format='coo', dtype=np.float32)
     del sparse_array_list
     if not sparse_array.has_canonical_format:
-        print("Converting sparse array is into canonical format")
+        print("Converting sparse array is into canonical format and saving...")
         sparse_array.eliminate_zeros()
         sparse_array.sum_duplicates()
     
     # save sparse matrix in npz format
     sparse_array_file = f'{prefix_path}.r2.unphased.vcor2.bin.sparse_csr.npz'
     sps.save_npz(sparse_array_file, sparse_array.tocsr())
-    print(f"Sparsity: {sparse_array.nnz / (sparse_array.shape[0] * sparse_array.shape[1]) * 100:.2f}%")
+    print(f"Sparsity: {sparse_array.nnz / (sparse_array.shape[0] * sparse_array.shape[1]) * 100:.2f}%\n")
 
 
 if __name__ == "__main__":
