@@ -8,6 +8,8 @@ testing/
 data/
 data-small/
 data-large/
+example/
+IPDGC/
 
 intel*
 plink2

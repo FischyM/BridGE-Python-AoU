@@ -1,4 +1,4 @@
-import pickle
+import pickle, sys
 from itertools import combinations
 
 import numpy as np
@@ -8,6 +8,7 @@ from scipy.sparse import csr_array, coo_array
 from pgenlib import PgenReader
 
 from classes import SNPclass, genesetclass, snpgeneclass, snpsetclass, bpmindclass
+from filter_pathways import filter_msigdb
 
 
 def plink2pkl(pgen_file, pvar_file, psam_file, output_file):
@@ -82,7 +83,7 @@ def plink2pkl(pgen_file, pvar_file, psam_file, output_file):
         pickle.dump(snp_data, f)
 
 
-def msigdb2pkl(symbols_file, entrez_file, output_file):
+def msigdb2pkl(symbols_file, entrez_file, min_size, max_size, output_file):
     """Convert MsigDB gene set file (.gmt) to pickle file (Python pkl).
         
     Args:
@@ -101,7 +102,15 @@ def msigdb2pkl(symbols_file, entrez_file, output_file):
     entrez_df = entrez_df[0].str.split('\t', expand=True, n=2)
     entrez_df.columns = ['pathway_names', "url", "entrez_ids"]
     entrez_df['entrez_ids'] = entrez_df['entrez_ids'].str.split('\t')
-
+    
+    # filter pathways based in size and similarity
+    if symbols_df['pathway_names'].equals(entrez_df['pathway_names']):
+        sys.exit(
+            f"Error: pathway names/order in {symbols_file} and {entrez_file} do not match. "
+            "The two files must describe the same gene sets in the same row order."
+        )
+        
+        
     # make gene by pathway binary matrix
     pathway_list = symbols_df['pathway_names'].tolist()
     gene_list = list(set([gene for sublist in symbols_df['gene_names'].tolist() for gene in sublist]))

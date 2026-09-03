@@ -1,0 +1,116 @@
+#!/bin/bash
+set -e
+set -u
+set -o pipefail
+
+
+# if you do not have an environment manager, download and install miniforge3 for your system
+# and example is below
+wget https://github.com/conda-forge/miniforge/releases/download/26.5.3-0/Miniforge3-26.5.3-0-Linux-x86_64.sh
+bash Miniforge3-26.5.3-0-Linux-x86_64.sh
+conda init
+
+# install BridGE environment
+conda env create -f env.yml
+conda activate bridge
+
+# make directories
+mkdir -p example/raw
+mkdir -p example/preprocess
+mkdir -p example/intermediate
+mkdir -p example/results
+
+
+# download example data
+cd example/raw
+
+wget https://zenodo.org/record/8067407/files/gwas_subset.bed
+wget https://zenodo.org/record/8067407/files/gwas_subset.bim
+wget https://zenodo.org/record/8067407/files/gwas_subset.fam
+
+wget https://zenodo.org/records/8067407/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.bed
+wget https://zenodo.org/records/8067407/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.bim
+wget https://zenodo.org/records/8067407/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.fam
+
+wget https://zenodo.org/records/8067407/files/allpopid.txt
+
+cd ../..
+
+
+# example data needs to be converted to GRCh38. 
+# This should always be done first to avoid inconsistencies with genome builds.
+# download liftover and chain file for lifting data from GRCh37 to GRCh38
+cd example/preprocess
+
+wget https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/liftOver
+chmod +x liftOver
+wget https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz
+
+cd ../..
+
+
+# convert data to pgen format
+./plink2 --bfile example/raw/gwas_subset --make-pgen --out example/preprocess/gwas_subset
+./plink2 --bfile example/raw/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid --make-pgen --out example/preprocess/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid
+
+# then, convert .pvar file to .bed file, run liftover, and convert back to .pvar file
+python liftover_helper.py extract-bed \
+    --pfile-prefix=example/preprocess/gwas_subset \
+    --bed-out=example/preprocess/prelift.bed \
+    --skipped-out=example/preprocess/prelift.skipped.txt
+# liftover the BED file to GRCh38
+./example/raw/liftOver \
+    example/preprocess/prelift.bed \
+    example/raw/hg19ToHg38.over.chain.gz \
+    example/preprocess/lifted.hg38.mapped.bed \
+    example/preprocess/lifted.hg38.unmapped.bed
+# parse liftover output
+python liftover_helper.py parse-results \
+    --mapped-bed=example/preprocess/lifted.hg38.mapped.bed \
+    --unmapped-bed=example/preprocess/lifted.hg38.unmapped.bed \
+    --skipped-contigs=example/preprocess/prelift.skipped.txt \
+    --keep-ids-out=example/preprocess/lifted.hg38.keep_ids.txt \
+    --chr-update-out=example/preprocess/lifted.hg38.chr_update.txt \
+    --pos-update-out=example/preprocess/lifted.hg38.pos_update.txt \
+    --removed-log-out=example/preprocess/lifted.hg38.removed.log
+# update the .pvar file with the new coordinates
+./plink2 --pfile example/preprocess/gwas_subset \
+    --extract example/preprocess/lifted.hg38.keep_ids.txt \
+    --update-chr example/preprocess/lifted.hg38.chr_update.txt \
+    --update-map example/preprocess/lifted.hg38.pos_update.txt \
+    --sort-vars --make-pgen \
+    --out example/preprocess/gwas_subset.hg38
+
+
+# check the study population against 1000 Genomes reference populations.
+# writes example/intermediate/gwas_subset_prj1000.{eigenvec,eigenval,popid.txt,pdf}
+./example-check_population.sh \
+    example/preprocess/gwas_subset.hg38 \
+    example/preprocess/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid \
+    example/raw/allpopid.txt \
+    example/preprocess/gwas_subset_prj1000
+
+# drop samples that sit outside the intended cluster. The four cutoffs bound
+# PC1 then PC2 and are read off example/intermediate/gwas_subset_prj1000.pdf;
+# adjust it for your own data.
+./example-remove_outlier.sh \
+    example/preprocess/gwas_subset.hg38 \
+    example/preprocess/gwas_subset_prj1000.eigenvec \
+    example/preprocess/gwas_subset.hg38.rmoutlier \
+    0.075 0.11 0.075 0.12
+
+
+# Preprocess the data to remove related samples, match cases to controls, and prune SNPs for LD.
+./example-preprocess.sh example/preprocess/gwas_subset.hg38.rmoutlier example/intermediate/gwas_final
+
+
+# Run BridGE
+python bridge.py --projectDir=example --job=DataProcess --plinkFile=gwas_final --geneAnnotation=glist-hg38 --genesets=c2.cp.v7.1
+
+python bridge.py --projectDir=example --job=ComputeInteraction --model=combined --nWorker=30 --R=5
+
+python bridge.py --projectDir=example --job=ComputeStats --model=combined --nWorker=10 --snpPerms=100 --minPath=10 --R=5
+
+python bridge.py --projectDir=example --job=ComputeFDR --model=combined --pvalueCutoff=0.05 --minPath=10 --samplePerms=5
+
+python bridge.py --projectDir=example --job=Summarize --model=combined --fdrcut=0.25 --snpPathFile=snp_pathway_min10_max300.pkl

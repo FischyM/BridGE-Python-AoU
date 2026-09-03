@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # seting up permissions
-#chmod u+x preprocessgwas.sh
+chmod u+x preprocessgwas.sh
 chmod u+x scripts/*.sh
 chmod u+x scripts/plink
 chmod u+x scripts/cassi-run.sh
@@ -14,5 +14,6 @@ export PYTHONPATH=$CURRENTDIR:$CURRENTDIR/scripts:$CURRENTDIR/corefuns:$CURRENTD
 export PATH=$CURRENTDIR/scripts/:$PATH
 export PATH=$CURRENTDIR/:$PATH
 export PATH=$CURRENTDIR/cassi:$PATH
-alias plink='${CURRENTDIR}/scripts/plink'
+alias plink1.9='${CURRENTDIR}/scripts/plink'
+alias plink2="plink2"
 

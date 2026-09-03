@@ -29,11 +29,9 @@ conda create -name bridge-aou -c conda-forge python=3.12 matplotlib networkx num
 however, I would add the following:
 
 ```bash
-conda create -name bridge-aou -c conda-forge python=3.12 matplotlib networkx numpy pandas scipy seaborn cython jupyterlab ipython scikit-learn polars bioconda::pgenlib openpyxl
-pip install memory_profiler  # for tracking RAM usage TODO:
-pip install psrecord  # maybe a better RAM tracking? TODO:
+conda create -name bridge-aou -c conda-forge python=3.12 matplotlib networkx numpy pandas scipy seaborn cython jupyterlab ipython scikit-learn polars openpyxl bioconda::pgenlib
 pip install psutil
-conda env export > updated-environment.yml
+conda env export > env.yml
 # conda env create -f updated-environment.yml
 # TODO: remake the environment with just the essential packages
 ```
@@ -61,7 +59,7 @@ conda env export > updated-environment.yml
 In BridGE, GWAS data is preprocessed in the following way (found in preprocessgwas.sh)
 
 Remove samples and variants that are missing for than the given threshold.
-``plink2 --pfile {inPlinkFile} --hwe 0.000001 0.001 --make-pgen --out {outPlinkFile}``
+``plink2 --pfile {inPlinkFile} --hwe 0.00001 0.001 --make-pgen --out {outPlinkFile}``
 
 These scripts can be skipped as they are taken care in the following ways
 
@@ -95,6 +93,94 @@ plink2 --pfile {input_file} --r2-unphased square bin4 --out {output_file} --chr 
 
 TODO: redo shell scripts to change everything to plink2 that will run the same way as we do for the AoU data
 
+### Population check and outlier removal
+
+`scripts/data_checkpopulation.sh` and `scripts/data_removeoutlier.sh` were
+replaced by `example-check_population.sh` + `check_population.py` and
+`example-remove_outlier.sh` + `remove_outlier.py`. Same two outputs as before
+(a plot of the study cohort against the 1000 Genomes reference populations, and
+a genotype fileset with the off-cluster samples dropped), but:
+
+- Population axes come from `plink2 --pca` instead of plink 1.9
+  `--genome` + `--cluster --mds-plot 2`. `--genome` builds an all-pairs IBD
+  matrix, which is O(samples^2) and dominated the old runtime. Coordinates are
+  now PCs, not MDS dimensions, so the `--x1/--x2/--y1/--y2` cutoffs are on a
+  different scale and have to be re-read off the new plot.
+- **The two panels are no longer merged.** plink2 through v2.0.0-a.7 cannot do
+  a sample-wise merge: `--pmerge` exits with "Non-concatenating
+  `--pmerge[-list]` is under development", whether or not the sample sets
+  overlap. So the axes are defined by a PCA of the reference panel alone
+  (`--pca allele-wts`) and both cohorts are projected onto them with `--score`.
+  Running the same `--score` over both cohorts is what makes the coordinates
+  comparable; verified by projecting the reference panel onto its own PCs and
+  recovering `--pca`'s eigenvectors to within 1e-6 (up to the per-PC sign and
+  scale that a shared projection cancels out). This is also the better-behaved
+  choice statistically: study samples can no longer rotate the reference axes.
+- Allele conflicts between the study panel and the reference panel are found by
+  comparing the two `.pvar` files up front (`check_population.py
+  shared-variants`). The old script discovered them by attempting a merge,
+  reading plink 1.9's `.missnp` output and re-merging in a `while` loop, which
+  meant merging the data up to three times.
+- The reference panel is subset (populations, founders, biallelic, MAF, study
+  variants) in a single `plink2` pass rather than four chained plink 1.9
+  `--make-bed` calls, each of which rewrote the whole genotype matrix.
+- The one-hot population file was built by one `grep` over the population file
+  per sample, plus an `awk` per sample to place the 1. It is now a single pass
+  with a dict lookup, written from the same row list as the coordinate table so
+  the two cannot disagree.
+- The coordinate and label files hold one row per individual. A sample present
+  in both cohorts -- the bundled example draws its study data from the
+  reference panel, so all 479 reference samples are also study samples -- gets
+  the study projection for its coordinates and its 1000 Genomes population for
+  its label. That reproduces plink 1.9 `--bmerge`, which merged same-ID samples
+  into one; keeping both rows instead buries the reference clouds underneath
+  their study twins in the plot.
+- Outlier selection reads the `.eigenvec` directly instead of `awk`-ing fixed
+  column positions, so it does not break when plink2 omits the FID column, and
+  each of the four bounds is optional.
+- Both scripts write pgen rather than bed/bim/fam; `example-preprocess.sh` now
+  takes `--pfile` to match.
+
+Noticed while testing: **the bundled example data was on two genome builds.**
+`gwas_subset` is GRCh37 while the 1000 Genomes panel is GRCh38 (e.g.
+rs144434834 is at 1:723918 in the study and 1:788538 in the reference); 836207
+of the 843458 shared variants disagreed on position. The old script never
+noticed because plink 1.x `--bmerge` matches on variant ID alone. It did not
+invalidate the population axes -- `--score` also matches on ID, and genotypes
+are build-independent -- but LD pruning uses coordinates, and `example-run.sh`
+goes on to annotate with `glist-hg38`.
+`check_population.py shared-variants` warns when this happens.
+
+### Liftover
+
+`example-liftover.sh` + `liftover.py` were added, and `example-run.sh` now
+lifts `gwas_subset` from GRCh37 to GRCh38 before anything else.
+
+PLINK cannot lift over, and the usual helpers (UCSC `liftOver`, CrossMap) are
+extra installs, so the chain lookup is done in `liftover.py`. A UCSC
+`.over.chain` is small -- hg19ToHg38 is ~1300 chains and ~56000 blocks -- and
+SNPs only need point lookups, so a heavier dependency buys nothing. It follows
+liftOver's rules: highest-scoring chain wins where several cover a position,
+non-primary contigs (alt/random/unplaced) are dropped, and minus-strand targets
+are dropped because their alleles would need complementing and `--update-map`
+cannot do that. It emits `--update-map`, `--update-chr` and `--extract` files;
+the `--extract` list matters, because `--update-map` leaves unlisted variants
+at their old coordinates and would silently mix two builds in one fileset.
+
+On `gwas_subset`: 997729 of 1000767 variants lift (99.70%) in about 10 seconds.
+Of the 3038 dropped, 2514 land on the minus strand, 348 on non-primary contigs
+and 176 have no aligned block. Validated against the GRCh38 1000 Genomes panel,
+which is an independent source of coordinates for the same rsIDs: of the 842322
+lifted variants also in the panel, 842303 agree (99.998%). The 19 that disagree
+all sit in the 1q21 segmental duplications, where the chain is genuinely
+ambiguous and real `liftOver` behaves the same way.
+
+Alleles are not checked against the GRCh38 reference. A small number of sites
+differ in which allele is reference between builds; BridGE treats REF/ALT
+symmetrically so it does not matter here, but
+`plink2 --fa <GRCh38>.fa --ref-from-fa force` will fix it if something
+downstream needs a correct REF.
+
 ### Imputation
 
 Since AoU has diverse ancestry samples, we fill in any missing variant values (we are not imputing variants that were not genotypes) that were set that way by AoU quality filtering. This involves selecting the statistically phased genomic regions that overlap with out data. This is done in with plink, bcftools, and python.
@@ -114,7 +200,6 @@ Since AoU has diverse ancestry samples, we fill in any missing variant values (w
 
 - merge all separate files into one python file
 - plink2pkl.py
-
   - This implementation's result matches the older version.
   - Changed to use pgen file format with --export A option in plink2.
   - Change to loading with pgenlib to make it cleaner and so that I don't have to save a large genotype file as a raw text file

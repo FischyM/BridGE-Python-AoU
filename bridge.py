@@ -32,8 +32,8 @@ def parse_args():
     
     # data processing arguments
     p.add_argument('--plinkFile', dest='plinkfile', default='')
-    p.add_argument('--genesets', default='c2.cp.v7.1')
-    p.add_argument('--geneAnnotation', dest='gene_annotation', default='glist-hg38')
+    p.add_argument('--genesets', default='')
+    p.add_argument('--geneAnnotation', dest='gene_annotation', default='')
     p.add_argument('--mappingDistance', type=int, default=50000)
     p.add_argument('--minPath', type=int, default=10)
     p.add_argument('--maxPath', type=int, default=300)
@@ -75,7 +75,7 @@ def run_data_process(args):
     entrez_file = f"{args.project_dir}/raw/{args.genesets}.entrez.gmt"
     require_exists(symbols_file, entrez_file)
     gene_pathway_pkl = f"{args.project_dir}/intermediate/gene_pathway_mapping.pkl"
-    datatools.msigdb2pkl(symbols_file, entrez_file, gene_pathway_pkl)
+    datatools.msigdb2pkl(symbols_file, entrez_file, args.minPath, args.maxPath, gene_pathway_pkl)
     # TODO: reduce gene set based on Jaccard similarity?
 
 
