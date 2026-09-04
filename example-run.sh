@@ -77,7 +77,6 @@ plink2 --pfile example/preprocess/gwas_subset \
 plink2 --pfile example/preprocess/gwas_subset.hg38 --autosome --make-bed --out ../BridGE-Python/testdata/raw/gwas_subset.hg38
 
 
-
 # check the study population against 1000 Genomes reference populations.
 # writes example/intermediate/gwas_subset_prj1000.{eigenvec,eigenval,popid.txt,pdf}
 check_population.sh \
@@ -95,12 +94,12 @@ remove_outlier.sh \
     example/preprocess/gwas_subset.hg38.rmoutlier \
     0.075 0.11 0.075 0.12
 
-
 # Preprocess the data to remove related samples, match cases to controls, and prune SNPs for LD.
 preprocess.sh example/preprocess/gwas_subset.hg38.rmoutlier example/raw/gwas_final
 
 # Run BridGE
-python bridge.py --projectDir=example --module=DataProcess \
+# 1 min
+time python bridge.py --projectDir=example --module=DataProcess \
     --plinkFile=gwas_final \
     --geneAnnotation=glist-hg38 \
     --geneSets=c2.cp.v2026.1.Hs \
@@ -111,11 +110,11 @@ python bridge.py --projectDir=example --module=DataProcess \
 plink2 --pfile example/raw/gwas_final --make-bed --out ../BridGE-Python/testdata/intermediate/gwas_final.new
 cp example/raw/c2.cp.v2026.1.Hs.* ../BridGE-Python/testdata/raw/
 
-python bridge.py --projectDir=example --module=ComputeInteraction --model=combined \
-    --nWorker=30 --nJobs=5 --R=0 --seed=42
+time python bridge.py --projectDir=example --module=ComputeInteraction --model=combined --nWorker=30 --nJobs=2 --seed=42 --R=5
 
-python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=10 --snpPerms=100 --minPath=10 --R=5
+time python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=30 --nJobs=2 --snpPerms=100 --seed=42 --R=0
+time python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=30 --nJobs=2 --snpPerms=100 --seed=42 --R=5
 
-python bridge.py --projectDir=example --module=ComputeFDR --model=combined --pvalueCutoff=0.05 --minPath=10 --samplePerms=5
+time python bridge.py --projectDir=example --module=ComputeFDR --model=combined --pvalueCutoff=0.05 --R=5
 
-python bridge.py --projectDir=example --module=Summarize --model=combined --fdrcut=0.25 --snpPathFile=snp_pathway_min10_max300.pkl
+time python bridge.py --projectDir=example --module=Summarize --model=combined --fdrCutoff=0.25

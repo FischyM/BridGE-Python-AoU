@@ -1,5 +1,4 @@
-import math
-import pickle
+import math, pickle, signal
 import multiprocessing as mp
 from datetime import datetime
 
@@ -450,6 +449,11 @@ def snp_permutation_parallel(perm_args):
 # main routine
 # ---------------------------------------------------------------------------
 
+# provide a more elegant way to cancel the worker pool on Ctrl+C
+def init_worker():
+    # Ignore SIGINT in worker processes; only the main process should handle it
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+        
 def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_workers, seed):
     ## inputs:
     ## - input_network: scipy.sparse interaction network (csr_array)
@@ -510,15 +514,23 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
     path1bggi = np.zeros(bpm_size)
     path2bggi = np.zeros(bpm_size)
 
-    with ctx.Pool(processes=n_workers) as pool:
+    pool = ctx.Pool(processes=n_workers, initializer=init_worker)
+    try:
         for chunk in split_indices(np.arange(bpm_size), n_jobs):
             job_args = [par_rank_args(i, part) for i, part in enumerate(split_indices(chunk, n_workers))]
             for j_arg, res in zip(job_args, pool.map(bpm_chi2_parallel, job_args)):
                 bpmgi[j_arg.rows] = res[0]
                 path1bggi[j_arg.rows] = res[1]
                 path2bggi[j_arg.rows] = res[2]
-    clear_shared()
-
+        pool.close()
+        pool.join()
+        clear_shared()
+        
+    except KeyboardInterrupt:
+        print("\nCtrl+C received — terminating worker pool...")
+        pool.terminate()
+        pool.join()
+        
     # bpm non interaction
     bpmnotgi = bpmsize - bpmgi
     bpmnotgi[bpmnotgi < 0] = 0
@@ -642,13 +654,21 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
 
         # parallel run for computing ranksum, in n_jobs sequential chunks
         publish_shared(mm=mm, bpmind1=bpmind1, bpmind2=bpmind2)
-        with ctx.Pool(processes=n_workers) as pool:
+        pool = ctx.Pool(processes=n_workers, initializer=init_worker)
+        try:
             for chunk in split_indices(np.arange(n_keep), n_jobs):
                 job_args = [par_rank_args(i, part) for i, part in enumerate(split_indices(chunk, n_workers))]
                 for j_arg, res in zip(job_args, pool.map(parallel_ranksum, job_args)):
                     bpmsum_tmp[j_arg.rows] = res[0]
                     bpm_local_tmp[j_arg.rows] = res[1]
-        clear_shared()
+            pool.close()
+            pool.join()
+            clear_shared()
+            
+        except KeyboardInterrupt:
+            print("\nCtrl+C received — terminating worker pool...")
+            pool.terminate()
+            pool.join()
 
         density_bpm[ind2keep_bpm] = bpmsum_tmp / bpmsize[ind2keep_bpm]
         bpm_local = np.zeros(bpm_size)
@@ -768,14 +788,22 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
     pieces = [pc for pc in np.array_split(np.arange(snpPerms), n_workers) if pc.size]
     job_args = [perm_args(int(pc[0]), int(pc.size)) for pc in pieces]
 
-    with ctx.Pool(processes=n_workers) as pool:
+    pool = ctx.Pool(processes=n_workers, initializer=init_worker)
+    try:
         results = pool.map(snp_permutation_parallel, job_args)
-    # combine results
-    for res in results:
-        count_bpm = count_bpm + res[0]
-        count_wpm = count_wpm + res[1]
-        count_path = count_path + res[2]
-    clear_shared()
+        # combine results
+        for res in results:
+            count_bpm = count_bpm + res[0]
+            count_wpm = count_wpm + res[1]
+            count_path = count_path + res[2]
+        pool.close()
+        pool.join()
+        clear_shared()
+    except KeyboardInterrupt:
+        print("\nCtrl+C received — terminating worker pool...")
+        pool.terminate()
+        pool.join()
+
     print(f"- {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
     bpm_local_pv[ind2keep_bpm] = (count_bpm + 1) / snpPerms

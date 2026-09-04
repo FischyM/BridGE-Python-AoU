@@ -1,4 +1,4 @@
-import argparse, signal, sys
+import argparse, psutil, signal, sys, threading, time
 import multiprocessing as mp
 from os import path
 
@@ -9,9 +9,11 @@ from corefuns import fdrsampleperm as fdr
 from corefuns import collectresults as cl
 
 
+
 MODULE_CHOICES = ('DataProcess', 'ComputeInteraction', 'ComputeStats', 'ComputeFDR', 'Summarize')
 VALID_MODELS = ('RR', 'RD', 'DD', 'combined')
 SIM_MEASURES = ('jaccard', 'overlap', 'either')
+
 
 def parse_args():
     p = argparse.ArgumentParser(description='BridGE pipeline', allow_abbrev=False)
@@ -29,6 +31,7 @@ def parse_args():
     p.add_argument('--densityCutoff', dest='density_cutoff', type=float, default=None)
     p.add_argument('--seed', dest='seed', type=int, default=42)
     p.add_argument('--ssmFile', dest='ssm_file', default=None)
+    p.add_argument('--noMem', dest='no_mem', action='store_true')
     
     # data processing arguments
     p.add_argument('--plinkFile', dest='plinkfile', default='')
@@ -53,14 +56,16 @@ def parse_args():
     p.add_argument('--pvalueCutoff', dest='pval_cutoff', type=float, default=0.05)
     
     # summarize arguments
-    p.add_argument('--fdrcut', type=float, default=0.25)
+    p.add_argument('--fdrCutoff', dest='fdr_cutoff', type=float, default=0.25)
     
     return p.parse_args()
+
 
 def require_exists(*filepaths):
     for filepath in filepaths:
         if not path.exists(filepath):
             sys.exit(f'{filepath} not found')
+
 
 def run_data_process(args):
     print('Data Processing')
@@ -73,6 +78,7 @@ def run_data_process(args):
     require_exists(pgen_file, pvar_file, psam_file)
     snp_data_pkl = f"{args.project_dir}/intermediate/snp_data.pkl"
     datatools.plink2pkl(pgen_file, pvar_file, psam_file, snp_data_pkl)
+    # TODO: Issues with changing MAF after all the preprocessing?
 
     # create a gene to pathway mapping from MSigDB gene set file.
     print('filtering and creating gene to pathway (gene set) mapping...')
@@ -101,26 +107,42 @@ def run_data_process(args):
     pathway_inds_pkl = f"{args.project_dir}/intermediate/pathway_indices.pkl"
     datatools.bpmind(args.project_dir, args.min_path_size, pathway_inds_pkl)
 
-def run_compute_interaction(args):
 
-    # TODO: add in memory tracking?
-    # TODO: redo/remove per job split print statements?
+def run_compute_interaction(args):
+    print("Computing SNP-SNP Interactions")
     
+    # TODO: fix plink1 cluster file use for phenotype permutation
+    
+    # setup memory tracking
+    def get_used_mem():
+        return psutil.virtual_memory().total - psutil.virtual_memory().available
+
+    initial_virtual_mem = get_used_mem()
+    peak = 0
+    stop_event = threading.Event()
+    
+    def monitor(interval=0.1):
+        nonlocal peak
+        while not stop_event.is_set():
+            peak = max(peak, get_used_mem())
+            time.sleep(interval)
+
+    monitor_thread = threading.Thread(target=monitor)
+    monitor_thread.start()
+
     # provide a more elegant way to cancel the worker pool on Ctrl+C
     def init_worker():
         # Ignore SIGINT in worker processes; only the main process should handle it
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     
     pool = mp.Pool(processes=args.n_workers, initializer=init_worker)
-    
-    indices = range(args.r + 1) if args.r >= 0 else [args.i]
     try:
+        indices = range(args.r + 1) if args.r >= 0 else [args.i]
         for i in indices:
             if args.model == 'combined':
                 ci.combine(args.project_dir, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
             else:
                 ci.run(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
-            print(flush=True)
         pool.close()
         pool.join()
         
@@ -128,11 +150,33 @@ def run_compute_interaction(args):
         print("\nCtrl+C received — terminating worker pool...")
         pool.terminate()
         pool.join()
-    
+        
+    stop_event.set()
+    monitor_thread.join()
+    if not args.no_mem:
+        print(f"peak memory of whole system: {(peak) / 1024**3:.2f} GB")
+        print(f"peak memory attributed to BridGE: {(peak - initial_virtual_mem) / 1024**3:.2f} GB")
+        
+        
 def run_compute_stats(args):
     
-    # TODO: add in memory tracking?
+    # setup memory tracking
+    def get_used_mem():
+        return psutil.virtual_memory().total - psutil.virtual_memory().available
 
+    initial_virtual_mem = get_used_mem()
+    peak = 0
+    stop_event = threading.Event()
+    
+    def monitor(interval=0.1):
+        nonlocal peak
+        while not stop_event.is_set():
+            peak = max(peak, get_used_mem())
+            time.sleep(interval)
+
+    monitor_thread = threading.Thread(target=monitor)
+    monitor_thread.start()
+    
     if args.n_jobs < 2:
         args.n_jobs = 2
         print("n_jobs should never be less than 2 for computing stats. n_jobs will be changed to 2")
@@ -150,7 +194,14 @@ def run_compute_stats(args):
             print(f'Computing statistics on {args.model}_R{i}')
             gs.genstats(args.project_dir, ssm_file, args.binary_network, args.density_cutoff,
                         args.snp_perms, args.n_jobs, args.n_workers, args.seed)
-
+            
+    stop_event.set()
+    monitor_thread.join()
+    if not args.no_mem:
+        print(f"peak memory of whole system: {(peak) / 1024**3:.2f} GB")
+        print(f"peak memory attributed to BridGE: {(peak - initial_virtual_mem) / 1024**3:.2f} GB")
+        
+        
 def run_compute_fdr(args):
     if args.ssm_file is None:
         ssm_file = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R0.pkl"
@@ -160,6 +211,7 @@ def run_compute_fdr(args):
     print(f'Computing FDR')
     fdr.fdrsampleperm(args.project_dir, ssm_file, args.pval_cutoff, args.R)
 
+
 def run_summarize(args):
     if args.ssm_file is None:
         imported = False
@@ -168,7 +220,8 @@ def run_summarize(args):
         imported = True
         ssm_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
         
-    cl.collectresults(args.project_dir, ssm_file, args.model, args.fdrcut, imported, args.density_cutoff)
+    cl.collectresults(args.project_dir, ssm_file, args.model, args.fdr_cutoff, imported, args.density_cutoff)
+
 
 MODULES_RUN = {
     'DataProcess': run_data_process,

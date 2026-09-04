@@ -63,7 +63,7 @@ def helper_score_from_counts(cache, g11, x11, g10, x10, g01, x01, g00, x00, alph
     log_out[q_min == 0] = 0
     log_out[~np.isfinite(log_out)] = 0
     log_out[log_out < 0] = 0
-    # NOTE: original also had `log_out[p11 == 0] = 0`, but p11 is always >= eps > 0 here
+    # original also had `log_out[p11 == 0] = 0`, but p11 is always >= eps > 0 here
     # (it was dead code in the original too) so it's omitted.
     return log_out
 
@@ -79,8 +79,8 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
         n_workers (_type_): _description_
         R (_type_): _description_
     """
-    
-    print(f'Computing SNP-SNP interactions: R={R} model={model}', flush=True)
+    t1 = datetime.now()
+    print(f'    R={R}, model={model}', end="", flush=True)
     output_name = f"{project_dir}/intermediate/ssM_mhygessi_{model}_R{R}.pkl"
     cluster_file = f"{project_dir}/intermediate/PlinkFile.cluster2"
 
@@ -97,7 +97,7 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
         snp_pathway_mapping: snpsetclass = pickle.load(f)
     varid_subset_ind = snp_data.varid.isin(snp_pathway_mapping.spmatrix.index)
     G_subset = G[:, varid_subset_ind]
-    
+    # print(f"n SNPs={len(snp_pathway_mapping.spmatrix.index)}", end="", flush=True)
     # convert genotype data to dominant and recessive coding with a simple mapping
     dom_map = np.array([0, 1, 1])  # dominant:  0->0, 1->1, 2->1 
     rec_map = np.array([0, 0, 1])  # recessive: 0->0, 1->0, 2->1
@@ -156,18 +156,16 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
 
     results = []
     for i in range(n_jobs):
-        t1 = datetime.now()
         i1 = idx[i]
         i2 = idx[i + 1]
-        # print(f"    job split {i+1}/{n_jobs}: i1={i1}, i2={i2}", flush=True, end="")
         
         sx = np.ascontiguousarray(sx_full[:, i1:i2], dtype=np.float64)
         s = sy_full.shape[1]
         tempx = sx * pheno[:, None]
-        sx_totals = sx.sum(axis=0)               # (b,)
-        casex_totals = tempx.sum(axis=0)         # (b,)
-        sy_totals = sy_full.sum(axis=0)               # (s,)
-        caseY_totals = (sy_full * pheno[:, None]).sum(axis=0)  # (s,)
+        sx_totals = sx.sum(axis=0)
+        casex_totals = tempx.sum(axis=0)
+        sy_totals = sy_full.sum(axis=0)
+        caseY_totals = (sy_full * pheno[:, None]).sum(axis=0)
         
         # For symmetric models (RR/DD) we only need the strict lower triangle of the full
         # s x s matrix - everything else is filled in by mirroring in run(). Compute the
@@ -216,18 +214,17 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
                                         g01_v, xp01_v, g00_v, xp00_v, alpha1, alpha2, False, pool, n_workers)
 
         nz_r = risk_score != 0
-        nz_p = prot_score != 0
-        
         risk_rows = out_rows[nz_r]
         risk_cols = out_cols[nz_r]
         risk_vals = risk_score[nz_r]
+        
+        nz_p = prot_score != 0
         prot_rows = out_rows[nz_p]
         prot_cols = out_cols[nz_p]
         prot_vals = prot_score[nz_p]
         
         results.append((risk_rows, risk_cols, risk_vals, prot_rows, prot_cols, prot_vals))
-        print(f" - {str(datetime.now() - t1).split('.')[0]}", flush=True)
-
+    
     risk_rows = np.concatenate([ r[0] for r in results ])
     risk_cols = np.concatenate([ r[1] for r in results ])
     risk_vals = np.concatenate([ r[2] for r in results ])
@@ -262,7 +259,9 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     )
 
     with open(output_name, 'wb') as final:
-        pickle.dump(network, final)   
+        pickle.dump(network, final)
+        
+    print(f" - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
 def combine_max(rr, rd, dd):
     """Combine three sparse matrices (RR, RD, DD) into a single sparse matrix of elementwise max values.
