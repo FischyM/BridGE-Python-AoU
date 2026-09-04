@@ -26,7 +26,7 @@ outputFile=$2       # base name of the output file (without extension)
 # basic QC
 mind=0.02           # maximum allowed fraction of missing genotypes per sample
 geno=0.02           # maximum allowed fraction of missing genotypes per variant
-hwe_p=0.00001       # minimum HWE p-value for variants to be included
+hwe_p=0.000001      # minimum HWE p-value for variants to be included
 hwe_k=0.001         # minimum HWE p-value adjustment factor for variants to be included
 maf=0.05            # minimum allele frequency for variants to be included
 # get a less redundant set of SNPs using LD pruning

@@ -21,7 +21,7 @@ def main():
         vars_df = pl.read_csv(chrom_vars_file, separator=" ", has_header=False)
         all_variants_list.append(vars_df)
         n = len(vars_df)
-        print(f"Embedding Chromosome {i} ({n} x {n} array)...")
+        # print(f"Embedding Chromosome {i} ({n} x {n} array)...")
 
         # read the raw bin4 data for this chromosome, reshape into square array and convert to scipy sparse coo array
         chrom_bin_file = f'{prefix_path}.ld_{i}.unphased.vcor2.bin' 
@@ -38,18 +38,18 @@ def main():
     total_variants_df.write_csv(total_variants_file, separator='\t', include_header=False)
 
     # stitch the separate sparse blocks together along the diagonal and convert to sparse.COO for fast slicing
-    print("\nStiching together all blocked sparse arrays into one...")
+    # print("\nStiching together all blocked sparse arrays into one...")
     sparse_array = sps.block_diag(sparse_array_list, format='coo', dtype=np.float32)
     del sparse_array_list
     if not sparse_array.has_canonical_format:
-        print("Converting sparse array is into canonical format and saving...")
+        # print("Converting sparse array is into canonical format and saving...")
         sparse_array.eliminate_zeros()
         sparse_array.sum_duplicates()
     
     # save sparse matrix in npz format
     sparse_array_file = f'{prefix_path}.r2.unphased.vcor2.bin.sparse_csr.npz'
     sps.save_npz(sparse_array_file, sparse_array.tocsr())
-    print(f"Sparsity: {sparse_array.nnz / (sparse_array.shape[0] * sparse_array.shape[1]) * 100:.2f}%\n")
+    # print(f"Sparsity: {sparse_array.nnz / (sparse_array.shape[0] * sparse_array.shape[1]) * 100:.2f}%\n")
 
 
 if __name__ == "__main__":

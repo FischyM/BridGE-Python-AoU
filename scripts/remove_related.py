@@ -141,7 +141,8 @@ def main():
           f"{removed_n['missing']} missing)")
     print(f"retained -> {args.out} : {len(kept)} "
           f"({kept_n['case']} case, {kept_n['control']} control, "
-          f"{kept_n['missing']} missing)\n\n")
+          f"{kept_n['missing']} missing)")
+    print()
 
 if __name__ == "__main__":
     main()
