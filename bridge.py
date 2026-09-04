@@ -1,4 +1,4 @@
-import argparse, sys
+import argparse, signal, sys
 import multiprocessing as mp
 from os import path
 
@@ -22,8 +22,8 @@ def parse_args():
     
     # common arguments
     p.add_argument('--model', choices=VALID_MODELS, default='combined')
-    p.add_argument('--nJobs', dest='n_jobs', type=int, default=10)
     p.add_argument('--nWorker', dest='n_workers', type=int, default=None)  # None will use all available cores
+    p.add_argument('--nJobs', dest='n_jobs', type=int, default=10)
     p.add_argument('--i', type=int, default=-1)
     p.add_argument('--R', dest='r', type=int, default=-1)
     p.add_argument('--densityCutoff', dest='density_cutoff', type=float, default=None)
@@ -100,26 +100,35 @@ def run_data_process(args):
     print('creating SNP indices for BPM/WPM sets...')
     pathway_inds_pkl = f"{args.project_dir}/intermediate/pathway_indices.pkl"
     datatools.bpmind(args.project_dir, args.min_path_size, pathway_inds_pkl)
-    # TODO: make this faster?
 
 def run_compute_interaction(args):
 
     # TODO: add in memory tracking?
     # TODO: redo/remove per job split print statements?
     
-    pool = mp.Pool(processes=args.n_workers)
+    # provide a more elegant way to cancel the worker pool on Ctrl+C
+    def init_worker():
+        # Ignore SIGINT in worker processes; only the main process should handle it
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    
+    pool = mp.Pool(processes=args.n_workers, initializer=init_worker)
     
     indices = range(args.r + 1) if args.r >= 0 else [args.i]
-    for i in indices:
-        if args.model == 'combined':
-            ci.combine(args.project_dir, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
-        else:
-            ci.run(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
-        print(flush=True)
+    try:
+        for i in indices:
+            if args.model == 'combined':
+                ci.combine(args.project_dir, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
+            else:
+                ci.run(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
+            print(flush=True)
+        pool.close()
+        pool.join()
         
-    pool.close()
-    pool.join()
-
+    except KeyboardInterrupt:
+        print("\nCtrl+C received — terminating worker pool...")
+        pool.terminate()
+        pool.join()
+    
 def run_compute_stats(args):
     
     # TODO: add in memory tracking?

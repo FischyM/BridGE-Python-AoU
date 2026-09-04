@@ -7,7 +7,7 @@ from scipy.sparse import coo_array
 
 from corefuns import HygeCache as hc
 from corefuns import withinclassrand as wrand
-from classes import SNPclass, InteractionNetwork
+from classes import SNPclass, snpsetclass, InteractionNetwork
 
 
 # matrix_operations_par computes the interaction network. The functions to call are run() and combine()
@@ -89,13 +89,20 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     with open(f"{project_dir}/intermediate/snp_data.pkl", "rb") as f:
         snp_data: SNPclass = pickle.load(f)
     pheno = snp_data.pheno
-    G = snp_data.data  # assuming there are no missing values in the genotype data (i.e., no -9s)
+    G = snp_data.data  # no missing data (-9) and is type int8.
+    # This data is cast to float64 a little below to allow fast matmul with the phenotype vector
+    
+    # filter out SNPs that didn't make it through SNP to pathway mapping
+    with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
+        snp_pathway_mapping: snpsetclass = pickle.load(f)
+    varid_subset_ind = snp_data.varid.isin(snp_pathway_mapping.spmatrix.index)
+    G_subset = G[:, varid_subset_ind]
     
     # convert genotype data to dominant and recessive coding with a simple mapping
     dom_map = np.array([0, 1, 1])  # dominant:  0->0, 1->1, 2->1 
     rec_map = np.array([0, 0, 1])  # recessive: 0->0, 1->0, 2->1
-    dataD = dom_map[G]
-    dataR = rec_map[G]
+    dataD = dom_map[G_subset]
+    dataR = rec_map[G_subset]
         
     symmetric_flag = (model == 'RR' or model == 'DD')
     if model == 'RR':
@@ -152,7 +159,7 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
         t1 = datetime.now()
         i1 = idx[i]
         i2 = idx[i + 1]
-        print(f"    job split {i+1}/{n_jobs}: i1={i1}, i2={i2}", flush=True, end="")
+        # print(f"    job split {i+1}/{n_jobs}: i1={i1}, i2={i2}", flush=True, end="")
         
         sx = np.ascontiguousarray(sx_full[:, i1:i2], dtype=np.float64)
         s = sy_full.shape[1]

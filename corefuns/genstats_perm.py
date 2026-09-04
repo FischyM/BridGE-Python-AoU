@@ -813,6 +813,7 @@ def genstats(project_dir, ssmfile, binary_flag, net_density, snp_perms, n_jobs, 
     p_network: csr_array = as_sparse(network.protective)
     r_network: csr_array = as_sparse(network.risk)
     
+    print(f"\tloaded protective and risk networks with {p_network.shape[0]:,} SNPs", flush=True)
     print(f"\t{p_network.shape[0] * p_network.shape[1]:,} entries in the SNP-SNP interaction network", flush=True)
     
     p_density = p_network.nnz / (p_network.shape[0] * p_network.shape[1]) * 100

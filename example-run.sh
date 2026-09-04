@@ -111,7 +111,8 @@ python bridge.py --projectDir=example --module=DataProcess \
 plink2 --pfile example/raw/gwas_final --make-bed --out ../BridGE-Python/testdata/intermediate/gwas_final.new
 cp example/raw/c2.cp.v2026.1.Hs.* ../BridGE-Python/testdata/raw/
 
-python bridge.py --projectDir=example --module=ComputeInteraction --model=combined --nWorker=30 --R=5
+python bridge.py --projectDir=example --module=ComputeInteraction --model=combined \
+    --nWorker=30 --nJobs=5 --R=0 --seed=42
 
 python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=10 --snpPerms=100 --minPath=10 --R=5
 

@@ -47,9 +47,7 @@ def plink2pkl(pgen_file, pvar_file, psam_file, output_file):
         n = pgr.get_raw_sample_ct()
         assert m == len(variant_df), f"Variant count mismatch: {m} vs {len(variant_df)}"
         assert n == len(sample_df), f"Sample count mismatch: {n} vs {len(sample_df)}"
-        
         # G[i] corresponds to line i of the .pvar, and G[i, j] to line j of the .psam
-        # NOTE: once the data is read, missing data is coded as -9
         G = np.empty((m, n), dtype=np.int8)  # variants x samples
         pgr.read_range(0, m, G)
         
@@ -192,6 +190,8 @@ def msigdb2pkl(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap_c
         for symbol, entrez_id in zip(symbol_genes, entrez_ids):
             symboldict[symbol] = int(entrez_id)
 
+    print(f"    {len(gene_pathway_df)} genes, {len(gene_pathway_df.columns)} pathways")
+
     # Converting data to pickle storage file with geneset class.
     geneset = genesetclass(entrezids=symboldict, gpmatrix=gene_pathway_df)
     with open(output_file, 'wb') as f:
@@ -278,6 +278,7 @@ def mapsnp2gene(pvar_file, gene_annotation_file, mapping_distance, output_file):
     data = np.ones(len(all_ids))
     sparse_array = coo_array((data, (rows, cols)), shape=(len(snplist), len(genelist)))
     snp_gene_df = pd.DataFrame(sparse_array.toarray(), index=snplist, columns=genelist, dtype=bool)
+    print(f"    {len(snplist)} SNPs, {len(genelist)} genes")
 
     # Saving snp-gene matrix to pickle file.
     snp_gene_class = snpgeneclass(sgmatrix=snp_gene_df, mapping_dist=mapping_distance)
@@ -354,6 +355,7 @@ def snppathway(project_dir, min_path, max_path, output_file):
     # check again the SNP limit (mostly just for lower bound, but we'll keep in upper bound too)
     ind = (np.sum(tmp_sgp_df, axis=0) <= max_path) & (np.sum(tmp_sgp_df, axis=0) >= min_path)
     tmp_sgp_df = tmp_sgp_df.loc[:, ind]
+    print(f"    {tmp_sgp_df.shape[0]} SNPs, {tmp_sgp_df.shape[1]} pathways")
 
     # Save data to pickle file.
     pathways = tmp_sgp_df.sum(axis=0)
@@ -446,7 +448,7 @@ def bpmind(project_dir, min_path, output_file):
     n_bpm = len(pairs['path1'])
     print(f"    Total number of WPMs: {len(wpm)}")
     print(f"    Total number of BPMs: {orig_size}")
-    print(f"    Total BPMs filtered with min_path={min_path}: {orig_size - n_bpm}")
+    print(f"    BPMs filtered with min_path={min_path}: {orig_size - n_bpm}")
     # print(f"    ind1/ind2 columns will need {materialized_bytes(pairs) / 2**30:.1f} GB")
 
     # Phase 2: expand into the original bpm format.
