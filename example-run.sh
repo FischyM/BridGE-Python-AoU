@@ -112,7 +112,6 @@ cp example/raw/c2.cp.v2026.1.Hs.* ../BridGE-Python/testdata/raw/
 
 time python bridge.py --projectDir=example --module=ComputeInteraction --model=combined --nWorker=30 --nJobs=2 --seed=42 --R=5
 
-time python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=30 --nJobs=2 --snpPerms=100 --seed=42 --R=0
 time python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=30 --nJobs=2 --snpPerms=100 --seed=42 --R=5
 
 time python bridge.py --projectDir=example --module=ComputeFDR --model=combined --pvalueCutoff=0.05 --R=5

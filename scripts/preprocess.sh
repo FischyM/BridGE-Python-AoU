@@ -62,7 +62,7 @@ plink2 --pfile "${plinkFile}.step2.pruned" \
     --make-king-table --king-table-filter ${king_filter} \
     --out "${plinkFile}.step3.king" --silent
 
-python -m remove_related \
+python -m remove_related_helper \
     --kin0 "${plinkFile}.step3.king.kin0" \
     --psam "${plinkFile}.step2.pruned.psam" \
     --out "${plinkFile}.step3.unrelated.id" \
@@ -78,7 +78,7 @@ plink2 --pfile "${plinkFile}.step3.unrelated" \
     --pca ${npcs} \
     --out "${plinkFile}.step4.pca" --silent
 
-python -m match_case_control \
+python -m match_case_control_helper \
     --eigenvec "${plinkFile}.step4.pca.eigenvec" \
     --eigenval "${plinkFile}.step4.pca.eigenval" \
     --psam "${plinkFile}.step3.unrelated.psam" \

@@ -63,11 +63,11 @@ legendPos=best      # southeast, southwest, northeast, northwest or best
 
 
 # 1. reference samples in the requested populations, and the study variant IDs
-python -m check_population ref-samples \
+python -m check_population_helper ref-samples \
     --ref-psam "${refPfile}.psam" --pop-id "${popIDFile}" --pops "${pops}" \
     --out "${out}.ref.id"
 
-python -m check_population variant-ids \
+python -m check_population_helper variant-ids \
     --pvar "${studyPfile}.pvar" --out "${out}.study.snps"
 
 
@@ -82,7 +82,7 @@ plink2 --pfile "${refPfile}" \
 
 
 # 3. variants the two panels agree on: same ID, same allele pair
-python -m check_population shared-variants \
+python -m check_population_helper shared-variants \
     --study-pvar "${studyPfile}.pvar" --ref-pvar "${out}.ref.pvar" \
     --out "${out}.shared.snps" --silent
 
@@ -119,7 +119,7 @@ done
 
 
 # 7. one coordinate table and one population-label file, written together
-python -m check_population combine \
+python -m check_population_helper combine \
     --ref-sscore "${out}.refproj.sscore" \
     --study-sscore "${out}.studyproj.sscore" \
     --pop-id "${popIDFile}" --pops "${pops}" --npcs ${npcs} \
@@ -129,7 +129,7 @@ cp "${out}.refpca.eigenval" "${out}.eigenval"
 
 
 # 8. plot the study cohort against the reference populations
-python -m plotmds "${out}.eigenvec" "${out}.popid.txt" "${legendPos}" "${out}"
+python -m plot_mds "${out}.eigenvec" "${out}.popid.txt" "${legendPos}" "${out}"
 
 rm -f "${out}.ref.id" "${out}.study.snps" "${out}.shared.snps" \
       "${out}.prune."{prune.in,prune.out,log} \

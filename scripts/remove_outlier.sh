@@ -27,7 +27,7 @@ x2=$5
 y1=$6
 y2=$7
 
-python3 -m remove_outlier \
+python -m remove_outlier_helper \
     --coords "${coordsFile}" \
     --x1 "${x1}" --x2 "${x2}" --y1 "${y1}" --y2 "${y2}" \
     --out "${out}.keep.id" --removed "${out}.outlier.id"

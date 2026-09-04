@@ -159,7 +159,7 @@ def run_compute_interaction(args):
         
         
 def run_compute_stats(args):
-    
+
     # setup memory tracking
     def get_used_mem():
         return psutil.virtual_memory().total - psutil.virtual_memory().available

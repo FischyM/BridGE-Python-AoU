@@ -484,7 +484,6 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
 
     ## ?Binary  -- mm is the binarized network used for the chi2 stage; mm_scores is kept
     ## alongside it instead of being np.copy()'d (both are sparse, so this is cheap).
-    # TODO: should this threshold be tunable or changed?
     if binary_flag:
         # if true, then the network was already binarized with present or not present
         mm = mm_scores

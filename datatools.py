@@ -61,11 +61,11 @@ def plink2pkl(pgen_file, pvar_file, psam_file, output_file):
     print("    Setting any missing values to zero")
     G[G == -9] = 0
 
-    # maf = np.mean(G, axis=0) / 2
-    # plt.hist(maf, bins=50)
-    # plt.xlabel("MAF")
-    # plt.ylabel("variants")
-    # plt.savefig(output_file.replace('.pkl', '.maf.png'))
+    maf = np.mean(G, axis=0) / 2
+    plt.hist(maf, bins=50)
+    plt.xlabel("MAF")
+    plt.ylabel("variants")
+    plt.savefig(output_file.replace('.pkl', '.maf.png'))
     
     # Structuring data to be saved into pickle format.
     snp_data = SNPclass(
