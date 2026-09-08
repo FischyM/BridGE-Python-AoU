@@ -278,6 +278,7 @@ def mapsnp2gene(pvar_file, gene_annotation_file, mapping_distance, output_file):
     data = np.ones(len(all_ids))
     sparse_array = coo_array((data, (rows, cols)), shape=(len(snplist), len(genelist)))
     snp_gene_df = pd.DataFrame(sparse_array.toarray(), index=snplist, columns=genelist, dtype=bool)
+    print(f"    mapping distance of {mapping_distance} bp removed {len(variant_df) - len(snplist)} SNPs")
     print(f"    {len(snplist)} SNPs, {len(genelist)} genes")
 
     # Saving snp-gene matrix to pickle file.
@@ -364,6 +365,75 @@ def snppathway(project_dir, min_path, max_path, output_file):
         pickle.dump(snp_set, f)
 
 def bpmind(project_dir, min_path, output_file):
+    """Exctracts SNP indices for BPM/WPM sets."""
+
+    # Reading in data files
+    with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
+        snp_set: snpsetclass = pickle.load(f)
+
+    # Retrieving pathways list from snp_set
+    pathways = snp_set.pathways
+    snpmat = snp_set.spmatrix
+
+    # Finding all possible combinations of pairs for pathway names and sizes.
+    combnames = np.array(list(combinations(pathways.index, 2)))
+
+    # Finding WPM indices
+    WPMind = [ np.nonzero(snpmat[column])[0].tolist() for column in snpmat.columns ]
+    wpmdata = {
+        'pathway': pathways.index,
+        'indsize': pathways.values,
+        'ind': WPMind,
+        'size': ((pathways.to_numpy() * pathways.to_numpy()) - pathways.to_numpy()),
+        }
+    wpm = pd.DataFrame(wpmdata)
+
+    # Finding BPM indices
+    BPMind1, BPMind2, ind1size, ind2size = [], [], [], []
+    for i in range(len(snpmat.columns)):
+        p1 = snpmat.iloc[:, i].to_numpy()
+        
+        for j in range(i + 1, len(snpmat.columns)):
+            p2 = snpmat.iloc[:, j].to_numpy()
+            
+            # snps in pathway 1 but not in pathway 2
+            d1 = p1 - p2
+            ind1 = np.where(d1 == 1)[0].tolist()
+            
+            # snps in pathway 2 but not in pathway 1
+            d2 = p2 - p1
+            ind2 = np.where(d2 == 1)[0].tolist()
+            
+            BPMind1.append(ind1)
+            BPMind2.append(ind2)
+            
+            ind1size.append(len(ind1))
+            ind2size.append(len(ind2))
+            
+    # Getting between pathway sizes by multiplying combination available pairs.
+    size = np.array(ind1size) * np.array(ind2size)
+    
+    # Orienting bpm/wpm data and converting to dataframes.
+    bpmdata = {
+        'path1names': combnames[:, 0], 'ind1': BPMind1, 'ind1size': ind1size, 
+        'path2names': combnames[:, 1], 'ind2': BPMind2, 'ind2size': ind2size, 
+        'size': size,
+        }
+    bpm = pd.DataFrame(bpmdata)
+    orig_size = len(bpm)
+    
+    # filter out pathways that are too small after removing SNPs that are in both pathways of a BPM
+    bpm = bpm[(bpm['ind1size'] >= min_path) & (bpm['ind2size'] >= min_path)]
+    print(f"    Total number of WPMs: {len(wpm)}")
+    print(f"    Total number of BPMs: {orig_size}")
+    print(f"    Total BPMs filtered with min_path={min_path}: {orig_size - len(bpm)}")
+
+    # Saving bpmind data to pickle file.
+    bpmobj = bpmindclass(bpm=bpm, wpm=wpm)
+    with open(output_file, 'wb') as f:
+        pickle.dump(bpmobj, f)
+
+def bpmind_optmized1(project_dir, min_path, output_file):
     """Extracts SNP indices for BPM/WPM sets.
 
     Option C: computes the surviving pathway pairs and their sizes with Option B's
@@ -524,77 +594,7 @@ def materialize_bpm(pairs, wpm, n_path, n_snp, start=0, stop=None):
         }
     return pd.DataFrame(bpmdata, index=pos)
 
-def bpmind_old(project_dir, min_path, output_file):
-    """Exctracts SNP indices for BPM/WPM sets."""
-
-    # Reading in data files
-    with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
-        snp_set: snpsetclass = pickle.load(f)
-
-    # Retrieving pathways list from snp_set
-    pathways = snp_set.pathways
-    snpmat = snp_set.spmatrix
-
-    # Finding all possible combinations of pairs for pathway names and sizes.
-    combnames = np.array(list(combinations(pathways.index, 2)))
-
-    # Finding WPM indices
-    WPMind = [ np.nonzero(snpmat[column])[0].tolist() for column in snpmat.columns ]
-    wpmdata = {
-        'pathway': pathways.index,
-        'indsize': pathways.values,
-        'ind': WPMind,
-        'size': ((pathways.to_numpy() * pathways.to_numpy()) - pathways.to_numpy()),
-        }
-    wpm = pd.DataFrame(wpmdata)
-
-    # Finding BPM indices
-    BPMind1, BPMind2, ind1size, ind2size = [], [], [], []
-    for i in range(len(snpmat.columns)):
-        p1 = snpmat.iloc[:, i].to_numpy()
-        
-        for j in range(i + 1, len(snpmat.columns)):
-            p2 = snpmat.iloc[:, j].to_numpy()
-            
-            # snps in pathway 1 but not in pathway 2
-            d1 = p1 - p2
-            ind1 = np.where(d1 == 1)[0].tolist()
-            
-            # snps in pathway 2 but not in pathway 1
-            d2 = p2 - p1
-            ind2 = np.where(d2 == 1)[0].tolist()
-            
-            BPMind1.append(ind1)
-            BPMind2.append(ind2)
-            
-            ind1size.append(len(ind1))
-            ind2size.append(len(ind2))
-            
-    # Getting between pathway sizes by multiplying combination available pairs.
-    size = np.array(ind1size) * np.array(ind2size)
-    
-    # Orienting bpm/wpm data and converting to dataframes.
-    bpmdata = {
-        'path1names': combnames[:, 0], 'ind1': BPMind1, 'ind1size': ind1size, 
-        'path2names': combnames[:, 1], 'ind2': BPMind2, 'ind2size': ind2size, 
-        'size': size,
-        }
-    bpm = pd.DataFrame(bpmdata)
-    orig_size = len(bpm)
-    
-    # filter out pathways that are too small after removing SNPs that are in both pathways of a BPM
-    bpm = bpm[(bpm['ind1size'] >= min_path) & (bpm['ind2size'] >= min_path)]
-    print(f"    Total number of WPMs: {len(wpm)}")
-    print(f"    Total number of BPMs: {orig_size}")
-    print(f"    Total BPMs filtered with min_path={min_path}: {orig_size - len(bpm)}")
-
-    # Saving bpmind data to pickle file.
-    bpmobj = bpmindclass(bpm=bpm, wpm=wpm)
-    with open(output_file, 'wb') as f:
-        pickle.dump(bpmobj, f)
-
-
-def bpmind_optimized(project_dir, min_path, output_file):
+def bpmind_optimized2(project_dir, min_path, output_file):
     """Extracts SNP indices for BPM/WPM sets.
 
     Option B: stores per-pathway SNP indices once (in wpm) and only pathway-pair

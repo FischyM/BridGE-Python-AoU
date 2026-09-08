@@ -95,8 +95,13 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     # filter out SNPs that didn't make it through SNP to pathway mapping
     with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
         snp_pathway_mapping: snpsetclass = pickle.load(f)
-    varid_subset_ind = snp_data.varid.isin(snp_pathway_mapping.spmatrix.index)
-    G_subset = G[:, varid_subset_ind]
+        
+    # subset and reorder the SNP data to match the order of SNPs in the snp to pathway mapping
+    varid_subset = snp_pathway_mapping.spmatrix.index
+    sorter = np.argsort(snp_data.varid)
+    mapper_subset_to_full_varid = sorter[np.searchsorted(snp_data.varid, varid_subset, sorter=sorter)]
+    G_subset = snp_data.data[:, mapper_subset_to_full_varid]
+    
     # print(f"n SNPs={len(snp_pathway_mapping.spmatrix.index)}", end="", flush=True)
     # convert genotype data to dominant and recessive coding with a simple mapping
     dom_map = np.array([0, 1, 1])  # dominant:  0->0, 1->1, 2->1 

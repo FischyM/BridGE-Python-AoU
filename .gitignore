@@ -10,7 +10,3 @@ data-small/
 data-large/
 example/
 IPDGC/
-
-intel*
-plink2
-vcf_subset

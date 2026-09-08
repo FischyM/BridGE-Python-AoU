@@ -78,7 +78,6 @@ def run_data_process(args):
     require_exists(pgen_file, pvar_file, psam_file)
     snp_data_pkl = f"{args.project_dir}/intermediate/snp_data.pkl"
     datatools.plink2pkl(pgen_file, pvar_file, psam_file, snp_data_pkl)
-    # TODO: Issues with changing MAF after all the preprocessing?
 
     # create a gene to pathway mapping from MSigDB gene set file.
     print('filtering and creating gene to pathway (gene set) mapping...')
@@ -106,6 +105,7 @@ def run_data_process(args):
     print('creating SNP indices for BPM/WPM sets...')
     pathway_inds_pkl = f"{args.project_dir}/intermediate/pathway_indices.pkl"
     datatools.bpmind(args.project_dir, args.min_path_size, pathway_inds_pkl)
+    # TODO: find difference between to pathways better
 
 
 def run_compute_interaction(args):
@@ -209,7 +209,7 @@ def run_compute_fdr(args):
         ssm_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
 
     print(f'Computing FDR')
-    fdr.fdrsampleperm(args.project_dir, ssm_file, args.pval_cutoff, args.R)
+    fdr.fdrsampleperm(args.project_dir, ssm_file, args.pval_cutoff, args.r)
 
 
 def run_summarize(args):
@@ -219,7 +219,9 @@ def run_summarize(args):
     else:
         imported = True
         ssm_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
-        
+    
+    # TODO: get_interaction_pair needs to work with the new LD file.
+    
     cl.collectresults(args.project_dir, ssm_file, args.model, args.fdr_cutoff, imported, args.density_cutoff)
 
 

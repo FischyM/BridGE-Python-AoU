@@ -14,10 +14,10 @@ Preprocessing Changes
 
 BridGE Changes (old uses the same genotype file and filtered gene sets to be comparable)
 
-| Module             | old            | new             | speed up |
-| ------------------ | -------------- | --------------- | -------- |
-| DataProcess        | 13.5 min       | 1 min           | 13x      |
-| ComputeInteraction | hr per network | min per network |          |
-| ComputeStats       | hr per network | min per network |          |
-| ComputeFDR         | hr             | sec             |          |
-| Summarize          | min            | sec             |          |
+| Module             | old            | new                 | speed up |
+| ------------------ | -------------- | ------------------- | -------- |
+| DataProcess        | 13 min         | 1 min               | 13x      |
+| ComputeInteraction | hr per network | 3 min per network   |          |
+| ComputeStats       | hr per network | 2.6 min per network |          |
+| ComputeFDR         | hr             | 25 sec              |          |
+| Summarize          | min            | 1 min               |          |

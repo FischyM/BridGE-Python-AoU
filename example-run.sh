@@ -47,7 +47,7 @@ plink2 --bfile example/raw/gwas_subset --make-pgen --out example/preprocess/gwas
 plink2 --bfile example/raw/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid --make-pgen --out example/preprocess/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid
 
 # then, convert .pvar file to .bed file, run liftover, and convert back to .pvar file
-python liftover_helper.py extract-bed \
+python -m liftover_helper extract-bed \
     --pfile-prefix=example/preprocess/gwas_subset \
     --bed-out=example/preprocess/prelift.bed \
     --skipped-out=example/preprocess/prelift.skipped.txt
@@ -58,7 +58,7 @@ python liftover_helper.py extract-bed \
     example/preprocess/lifted.hg38.mapped.bed \
     example/preprocess/lifted.hg38.unmapped.bed
 # parse liftover output
-python liftover_helper.py parse-results \
+python -m liftover_helper parse-results \
     --mapped-bed=example/preprocess/lifted.hg38.mapped.bed \
     --unmapped-bed=example/preprocess/lifted.hg38.unmapped.bed \
     --skipped-contigs=example/preprocess/prelift.skipped.txt \
@@ -75,6 +75,7 @@ plink2 --pfile example/preprocess/gwas_subset \
     --out example/preprocess/gwas_subset.hg38
 # save in plink bed format to run with BridGE 2.0
 plink2 --pfile example/preprocess/gwas_subset.hg38 --autosome --make-bed --out ../BridGE-Python/testdata/raw/gwas_subset.hg38
+
 
 
 # check the study population against 1000 Genomes reference populations.
@@ -94,11 +95,16 @@ remove_outlier.sh \
     example/preprocess/gwas_subset.hg38.rmoutlier \
     0.075 0.11 0.075 0.12
 
+
+
+
 # Preprocess the data to remove related samples, match cases to controls, and prune SNPs for LD.
 preprocess.sh example/preprocess/gwas_subset.hg38.rmoutlier example/raw/gwas_final
 
+
+
 # Run BridGE
-# 1 min
+# 1m 30s
 time python bridge.py --projectDir=example --module=DataProcess \
     --plinkFile=gwas_final \
     --geneAnnotation=glist-hg38 \
@@ -110,10 +116,11 @@ time python bridge.py --projectDir=example --module=DataProcess \
 plink2 --pfile example/raw/gwas_final --make-bed --out ../BridGE-Python/testdata/intermediate/gwas_final.new
 cp example/raw/c2.cp.v2026.1.Hs.* ../BridGE-Python/testdata/raw/
 
+# 17m, 30 workers
 time python bridge.py --projectDir=example --module=ComputeInteraction --model=combined --nWorker=30 --nJobs=2 --seed=42 --R=5
-
+# 20m, 30 workers
 time python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=30 --nJobs=2 --snpPerms=100 --seed=42 --R=5
-
+# 10s
 time python bridge.py --projectDir=example --module=ComputeFDR --model=combined --pvalueCutoff=0.05 --R=5
-
+# 14s
 time python bridge.py --projectDir=example --module=Summarize --model=combined --fdrCutoff=0.25

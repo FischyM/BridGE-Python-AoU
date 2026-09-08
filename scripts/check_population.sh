@@ -84,7 +84,7 @@ plink2 --pfile "${refPfile}" \
 # 3. variants the two panels agree on: same ID, same allele pair
 python -m check_population_helper shared-variants \
     --study-pvar "${studyPfile}.pvar" --ref-pvar "${out}.ref.pvar" \
-    --out "${out}.shared.snps" --silent
+    --out "${out}.shared.snps"
 
 
 # 4. PCA needs variants that are not too correlated with each other
