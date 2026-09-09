@@ -82,7 +82,6 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     t1 = datetime.now()
     print(f'    R={R}, model={model}', end="", flush=True)
     output_name = f"{project_dir}/intermediate/ssM_mhygessi_{model}_R{R}.pkl"
-    cluster_file = f"{project_dir}/intermediate/PlinkFile.cluster2"
 
     # loading and reading SNP data
     # read SNP data and convert to dominant and recessive coding
@@ -123,6 +122,7 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     population_size = pheno.shape[0]
     ## shuffle phenotypes if R != 0
     if R > 0:
+        cluster_file = f"{project_dir}/intermediate/PlinkFile.cluster2"
         if not path.exists(cluster_file):
             # single deterministic permutation per R
             rng = np.random.default_rng(seed * R)
@@ -130,7 +130,7 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
             pheno = pheno[permuted_idx]
         else:
             # TODO: this will fail and needs to be fixed if we ever want to run R > 0 with a cluster file
-            pheno = wrand.withinclassrand(R, cluster_file, f"{project_dir}/intermediate/SNPdataAD.pkl")
+            pheno = wrand.withinclassrand(seed * R, cluster_file, f"{project_dir}/intermediate/SNPdataAD.pkl")
 
     case_size = int(np.count_nonzero(pheno))
     control_size = population_size - case_size

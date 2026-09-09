@@ -71,13 +71,10 @@ python -m check_population_helper variant-ids \
     --pvar "${studyPfile}.pvar" --out "${out}.study.snps"
 
 
-# 2. cut the reference panel down to those samples and variants. This is the
-#    only pass over the full reference genotypes, so everything that can be
-#    filtered here is: --keep-founders replaces plink 1.9's --filter-founders
-#    and --max-alleles 2 replaces --biallelic-only strict.
+# 2. cut the reference panel down to those samples and variants.
 plink2 --pfile "${refPfile}" \
-    --keep "${out}.ref.id" --keep-founders \
-    --extract "${out}.study.snps" --max-alleles 2 --maf ${maf} \
+    --keep "${out}.ref.id" --keep-founders --snps-only \
+    --extract "${out}.study.snps" --maf ${maf} \
     --make-pgen --out "${out}.ref" --silent
 
 

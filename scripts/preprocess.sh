@@ -24,11 +24,11 @@ plinkFile=$1        # base name of the PLINK file (without extension)
 outputFile=$2       # base name of the output file (without extension)
 
 # basic QC
-mind=0.02           # maximum allowed fraction of missing genotypes per sample
-geno=0.02           # maximum allowed fraction of missing genotypes per variant
+mind=0.05           # maximum allowed fraction of missing genotypes per sample
+geno=0.01           # maximum allowed fraction of missing genotypes per variant
 hwe_p=0.000001      # minimum HWE p-value for variants to be included
 hwe_k=0.001         # minimum HWE p-value adjustment factor for variants to be included
-maf=0.05            # minimum allele frequency for variants to be included
+maf=0.01            # minimum allele frequency for variants to be included
 # get a less redundant set of SNPs using LD pruning
 ld_window=50        # window size for LD pruning in variant count (append 'kb' for kilobase units)
 ld_step=5           # step size for LD pruning in variant count (required to be 1 if using kb for window size)
@@ -88,7 +88,7 @@ python -m match_case_control_helper \
     
 plink2 --pfile "${plinkFile}.step3.unrelated" \
     --keep "${plinkFile}.step4.matched.id" \
-    --make-pgen --out "${outputFile}"
+    --make-pgen --out "${outputFile}" --silent
 
 
 # compute LD matrix for use in get_interaction_list

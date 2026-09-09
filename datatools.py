@@ -425,8 +425,8 @@ def bpmind(project_dir, min_path, output_file):
     # filter out pathways that are too small after removing SNPs that are in both pathways of a BPM
     bpm = bpm[(bpm['ind1size'] >= min_path) & (bpm['ind2size'] >= min_path)]
     print(f"    Total number of WPMs: {len(wpm)}")
-    print(f"    Total number of BPMs: {orig_size}")
-    print(f"    Total BPMs filtered with min_path={min_path}: {orig_size - len(bpm)}")
+    print(f"    Total number of BPMs: {orig_size:,}")
+    print(f"    Total BPMs filtered with min_path={min_path}: {orig_size - len(bpm):,}")
 
     # Saving bpmind data to pickle file.
     bpmobj = bpmindclass(bpm=bpm, wpm=wpm)

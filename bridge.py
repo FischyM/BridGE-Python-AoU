@@ -105,7 +105,6 @@ def run_data_process(args):
     print('creating SNP indices for BPM/WPM sets...')
     pathway_inds_pkl = f"{args.project_dir}/intermediate/pathway_indices.pkl"
     datatools.bpmind(args.project_dir, args.min_path_size, pathway_inds_pkl)
-    # TODO: find difference between to pathways better
 
 
 def run_compute_interaction(args):
