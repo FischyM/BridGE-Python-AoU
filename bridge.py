@@ -176,9 +176,9 @@ def run_compute_stats(args):
     monitor_thread = threading.Thread(target=monitor)
     monitor_thread.start()
     
-    if args.n_jobs < 2:
-        args.n_jobs = 2
-        print("n_jobs should never be less than 2 for computing stats. n_jobs will be changed to 2")
+    # if args.n_jobs < 2:
+    #     args.n_jobs = 2
+    #     print("n_jobs should never be less than 2 for computing stats. n_jobs will be changed to 2")
         
     if args.ssm_file is not None:
         ssm_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
@@ -219,8 +219,7 @@ def run_summarize(args):
         imported = True
         ssm_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
     
-    # TODO: get_interaction_pair needs to work with the new LD file.
-    
+    print(f'Summarizing results')
     cl.collectresults(args.project_dir, ssm_file, args.model, args.fdr_cutoff, imported, args.density_cutoff)
 
 

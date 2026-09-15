@@ -34,7 +34,7 @@ def main():
 
     # concat and save list of all variants
     total_variants_df = pl.concat(all_variants_list, how='vertical')
-    total_variants_file = prefix_path.with_name(f'{prefix_path.name}.ld.r2.vars')
+    total_variants_file = prefix_path.with_name(f'plink.ld.r2.vars')
     total_variants_df.write_csv(total_variants_file, separator='\t', include_header=False)
 
     # stitch the separate sparse blocks together along the diagonal and convert to sparse.COO for fast slicing
@@ -47,7 +47,7 @@ def main():
         sparse_array.sum_duplicates()
     
     # save sparse matrix in npz format
-    sparse_array_file = prefix_path.with_name(f'{prefix_path.name}.ld.r2.npz')
+    sparse_array_file = prefix_path.with_name(f'plink.ld.r2.npz')
     sps.save_npz(sparse_array_file, sparse_array)
     # print(f"Sparsity: {sparse_array.nnz / (sparse_array.shape[0] * sparse_array.shape[1]) * 100:.2f}%")
 

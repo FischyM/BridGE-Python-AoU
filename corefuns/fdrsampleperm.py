@@ -211,6 +211,7 @@ def fdrsampleperm(project_dir, ssmfile, pcut, R):
     wpm_data, wpm_pv_data = {}, {}
     path_data, path_pv_data = {}, {}
 
+    print(f"    Loading genstats files for 1 real network and {R} random networks...")
     for i in range(R+1):
         # load genstats file
         tmp_ssmFile = ssmfile.replace("_R0", "_R" + str(i))
@@ -236,7 +237,7 @@ def fdrsampleperm(project_dir, ssmfile, pcut, R):
     path = _stack(path_data)
     path_pv = _stack(path_pv_data)
 
-    # calling calculate_fdr() function to compute FDRs
+    print(f"    Computing FDRs for {bpm.shape[0]} BPMs, {wpm.shape[0]} WPMs, and {path.shape[0]} PATHs...")
     fdrbpm1, fdrbpm2 = calculate_fdr(bpm, bpm_pv, pcut, R, 'bpm')
     fdrwpm1, fdrwpm2 = calculate_fdr(wpm, wpm_pv, pcut, R, 'wpm')
     fdrpath1, fdrpath2 = calculate_fdr(path, path_pv, pcut, R, 'path')

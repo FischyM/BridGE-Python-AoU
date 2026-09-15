@@ -54,7 +54,7 @@ popIDFile=$3
 out=$4
 pops=${5:-CEU,CHB,ASW,YRI,GIH}
 
-maf=0.01            # PCs are unstable on rare variants, and --score cannot variance-standardize a monomorphic one
+maf=0.05            # PCs are unstable on rare variants, and --score cannot variance-standardize a monomorphic one
 ld_window=50        # window size for LD pruning, in variant count
 ld_step=5           # step size for LD pruning, in variant count
 ld_r2=0.2           # maximum squared correlation between retained variants

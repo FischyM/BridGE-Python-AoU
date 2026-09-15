@@ -91,7 +91,7 @@ conda env export > env.yml
 ## ComputeInteraction
 
 - This implementation's result matches the older version.
-- TODO: add in memory tracking for users to identify best configuration of n_workers and n_jobs
+- add in memory tracking for users to identify best configuration of n_workers and n_jobs
 - matrix_operations_par.py
   - add in a seed arg to control what random permutations get seeded with.
   - kept the splitting of jobs implementation, however, I noticed that numpy uses all available CPUs for mat mul calculations. Therefore, instead of running split jobs simultaneously across workers (which would could also increase RAM usage with a large number of SNPs), I split jobs with n_jobs and n_workers are used within each job. This means that we can adjust how big the total SNP-SNP interaction computation is (n_jobs, reduce RAM usage) while still using many workers to run all the hypergeometric tests.
@@ -113,7 +113,7 @@ conda env export > env.yml
 
 ## ComputeStats
 
-- TODO: add in memory tracking for users to identify best configuration of n_workers and n_jobs
+- add in memory tracking for users to identify best configuration of n_workers and n_jobs
 - bpmind.py saves wpmsize as (n^2 - n)
   - In WPM chi2 calculations, it does appear that wpmgi is calculated as the full matrix, so then the size would be doubled and this would then be accounted for
 - binarizing the network when binary_flag is false TODO:
@@ -128,7 +128,7 @@ conda env export > env.yml
 - n_workers is used to speed up chi2 and ranksum for BPMs and for SNP perms
 - Similar to ComputeInteractions, use n_jobs arg to control how much RAM is used by splitting the problem into smaller parts.
   - Recommend a test run with n_jobs=10, monitor RAM, and lower n_jobs to speed up computation time for the rest of the jobs you want to run.
-- Random seed generation is now reproducible. Before, your permutations would differ if you used a different number of workers. Now each worker sets the same seed, but depending on what section of the total SNP perms that a worker will compute, it burns the previous number of SNP perms to get to the same permutation for the number of SNP perms for a given seed. TODO: add in a seed arg to control what random permutations get seeded with. Allows for reproducibility but also flexibility if someone wants to do different seeds for whatever reason.
+- Random seed generation is now reproducible. Before, your permutations would differ if you used a different number of workers. Now each worker sets the same seed, but depending on what section of the total SNP perms that a worker will compute, it burns the previous number of SNP perms to get to the same permutation for the number of SNP perms for a given seed. add in a seed arg to control what random permutations get seeded with. Allows for reproducibility but also flexibility if someone wants to do different seeds for whatever reason.
 
 ## ComputeFDR
 

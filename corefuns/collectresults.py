@@ -88,6 +88,7 @@ def collectresults(project_dir, ssmfile, model, fdrcut, imported_ssm, densitycut
     ind_bpm = fdrBPM[fdrBPM <= fdrcut].dropna()
     ind_wpm = fdrWPM[fdrWPM <= fdrcut].dropna()
     ind_path = fdrPATH[fdrPATH <= fdrcut].dropna()
+    print(f"    Found {len(ind_bpm)} BPMs, {len(ind_wpm)} WPMs, and {len(ind_path)} PATHs below FDR {fdrcut}.")
 
     # Narrow the stats frames to the significant modules. Label-based throughout;
     # ind_*.index holds labels from these same frames.
@@ -112,6 +113,7 @@ def collectresults(project_dir, ssmfile, model, fdrcut, imported_ssm, densitycut
     
     pathway_inds_pkl = f"{project_dir}/intermediate/pathway_indices.pkl"
     if not (ind_bpm.empty and ind_wpm.empty and ind_path.empty):
+        print(f"    Finding driver SNP pairs for significant BPMs/WPMs")
         with open(pathway_inds_pkl, 'rb') as f:
             bpm_ind: bpmindclass = pickle.load(f)
         pathways = bpm_ind.wpm['pathway']
@@ -160,7 +162,9 @@ def collectresults(project_dir, ssmfile, model, fdrcut, imported_ssm, densitycut
             path_path = _stack(pathways).loc[ind_path.index]
             path_size = _stack(bpm_ind.wpm['indsize']).loc[ind_path.index]
             eff_path = _effect(ind_path, n_wpm, 'eff_path')
-
+    else:
+        print("    No driver SNP pairs saved as there were no significant BPMs/WPMs.")
+        
     # --- redundancy grouping and the pathway map ----------------------------
     (BPM_nosig_noRD, WPM_nosig_noRD, PATH_nosig_noRD,
      BPM_groups, WPM_groups, PATH_groups) = cbwr.check_BPM_WPM_redundancy(
@@ -170,7 +174,8 @@ def collectresults(project_dir, ssmfile, model, fdrcut, imported_ssm, densitycut
          bpmindfile=pathway_inds_pkl,
          FDRcut=fdrcut,
          )
-
+    print(f"    Found {len(BPM_nosig_noRD)} non-redundant BPMs, {len(WPM_nosig_noRD)} non-redundant WPMs, and {len(PATH_nosig_noRD)} non-redundant PATHs below FDR {fdrcut}.")
+    
     pmap.draw_map(project_dir, fdrcut, results_file, BPM_groups, WPM_groups, PATH_groups)
 
     # --- output tables ------------------------------------------------------
@@ -264,4 +269,5 @@ def collectresults(project_dir, ssmfile, model, fdrcut, imported_ssm, densitycut
     with pd.ExcelWriter(out_file) as writer:
         for name, table in sheets.items():
             if table is not None:
+                print(f"    Writing {name} with {len(table)} rows")
                 table.to_excel(writer, sheet_name=name)
