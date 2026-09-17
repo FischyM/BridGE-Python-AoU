@@ -2,7 +2,6 @@ name: bridge-aou
 channels:
   - conda-forge
   - bioconda
-  - defaults
 dependencies:
   - _openmp_mutex=4.5=20_gnu
   - _python_abi3_support=1.0=hd8ed1ab_2
