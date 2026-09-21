@@ -175,10 +175,6 @@ def run_compute_stats(args):
 
     monitor_thread = threading.Thread(target=monitor)
     monitor_thread.start()
-    
-    # if args.n_jobs < 2:
-    #     args.n_jobs = 2
-    #     print("n_jobs should never be less than 2 for computing stats. n_jobs will be changed to 2")
         
     if args.ssm_file is not None:
         ssm_file = f"{args.project_dir}/intermediate/{args.ssm_file}"

@@ -3,6 +3,7 @@ import multiprocessing as mp
 from datetime import datetime
 
 import numpy as np
+import pandas as pd
 from scipy.sparse import csr_array, issparse
 from scipy.stats import chi2, norm, rankdata
 
@@ -11,76 +12,83 @@ np.seterr(divide='ignore', invalid='ignore')
 
 # genstats() computes BPM/WPM/PATH statistics. Can be run parallel.
 #
-# REFACTOR NOTES (mirrors the approach taken in matrix_operations_par.py):
-#   - The interaction network is kept as a scipy.sparse.csr_array end to end. Nothing in this
-#     module ever materializes a dense (s x s) array, and the old dense sharedctypes.RawArray
-#     (plus the np.copy of it made inside every worker) is gone. This is the dominant RAM win:
-#     the previous code held one dense s x s copy in the parent plus one per worker.
-#   - All of the "sum a submatrix block" loops (bpmgi, wpmgi, bpmsum, wpmsum, and the same
-#     sums repeated inside every permutation) are replaced by the indicator-matrix identity
-#         sum(mm[ind1, :][:, ind2]) == u1.T @ mm @ u2   with u1/u2 0-1 indicator columns
-#     evaluated for many BPMs at once as (mm @ U2).multiply(U1).sum(axis=0). One sparse
-#     product now does what was a Python loop over bpm_size fancy-indexed slices. cyadd is
-#     no longer needed.
-#   - Permutations no longer permute the network. Permuting the columns of mm and then summing
-#     a block is identical to leaving mm alone and permuting the *rows of the indicator matrix*
-#     on the column side, so each permutation costs one sparse product instead of a rebuild of
-#     mm plus bpm_size slice-and-sum calls. The permutation SEQUENCE is reproduced exactly -
-#     see snp_permutation_parallel().
-#   - PATH degree used to call mannwhitneyu(dist_in, dist_out) once per pathway per permutation
-#     on length-s dense vectors. Because dist_in/dist_out always partition the same vector
-#     (sumMM, or a permutation of it), the midranks and the tie correction can be computed once
-#     and reused: the per-pathway statistic is then just a rank sum, i.e. P.T @ ranks. This is
-#     exact, not an approximation.
-#   - call_chi2 is a closed-form vectorized 2x2 chi-square instead of bpm_size calls into
-#     scipy.stats.chi2_contingency.
-#   - The old `tr` list was tested with `if i in tr` inside a loop over bpm_size, i.e. O(n^2).
-#     It is now the boolean mask `tr_mask`, derived directly from bpm['ind1size']/['ind2size'].
-#   - Dead code removed: pre_comp1/pre_comp2/xs1/xs2 (built, shared, read by the workers, then
-#     never used - and xs2 was built from pre_comp1 by copy/paste), the unused `arr`, the bare
-#     `wpm_local_pv` expression statement, the datetime/psutil timing scaffolding, and the
-#     unused `denisty_wpm` typo'd local.
-#   - n_jobs / n_workers: n_jobs splits work into that many *sequential* subsets to cap peak
-#     RAM, n_workers is the pool width. In the permutation stage n_jobs subsets the BPMs, not
-#     the permutations: the permuted index q is produced exactly as the original produced it
-#     and then fed to each subset in turn, so peak RAM falls with n_jobs while the permutation
-#     sequence is untouched.
-#   - Worker data sharing is by fork() copy-on-write: publish_shared() installs the read-only
-#     sparse structures on the module before the pool is created. This is the same platform
-#     assumption the previous sharedctypes/RawArray code already made.
+# REFACTOR NOTES
+#   The interaction network mm is a scipy.sparse.csr_array end to end; nothing here ever
+#   materializes a dense (s x s) array.
 #
-# BEHAVIOUR NOTES (differences from the old file):
-#   - Empirical p-values are REPRODUCIBLE: for a given snpPerms they do not depend on n_workers
-#     or n_jobs, so a result can be reproduced on any machine. The original did not have this
-#     property - it seeded one RNG stream per worker (seed + proc*1000, each of length
-#     snpPerms/n_workers), so changing the worker count changed the set of permutations drawn
-#     and hence the p-values.
-#     The canonical stream here is the original's n_workers=1 stream: one legacy MT19937 seeded
-#     with `seed`, snpPerms draws, COMPOUNDING (the original reassigned mmtmp, so iteration k acts
-#     on the composition of every draw so far). So this matches an original run at n_workers=1
-#     exactly, and will differ from an original run at any other worker count -- but those runs
-#     were not reproducible to begin with.
+#   Everything in the permutation stage is driven by one derived matrix:
+#
+#       A[r, j] = sum_{i in R_r} mm[i, j]        R_r = the r-th distinct BPM ROW SET
+#
+#   i.e. "total interaction weight between row set R_r and SNP j". A is DENSE, and it is
+#   indexed by distinct row set rather than by pathway, because a BPM's block is over SET
+#   DIFFERENCES - bpmindclass stores ind1 = P_a \ P_b and ind2 = P_b \ P_a - so a
+#   pathway-indexed matrix gives the wrong block for any pair whose pathways overlap. Pairs
+#   with disjoint pathways have ind1 == P_a and collapse onto a single shared row, so A only
+#   grows with the number of OVERLAPPING kept pairs. The identity that matters:
+#
+#       sum(mm[:, q][R_r, :][:, C_t]) == sum_{j in C_t} A[r, q[j]]
+#
+#   So a permutation costs one gather of length sum_t |C_t| over the kept BPMs plus a segment
+#   sum, and A is built once per network rather than once per permutation. The column side is
+#   unconstrained - the gather takes each BPM's own ind2 verbatim - so only the row side has to
+#   be a row of A.
+#
+#   This is the whole reason the permutation stage is fast. The previous version evaluated
+#   (mm @ U2).multiply(U1) per permutation with one indicator column PER BPM; that recomputed
+#   mm @ (indicator) once for every BPM and allocated an (s x n_bpm) sparse intermediate each
+#   time. Cost per permutation drops from O(n_bpm * nnz_per_column) to O(sum of kept column-set
+#   sizes) - roughly 10^9 sparse multiply-adds down to ~10^7 element reads.
+#
+#   The OBSERVED (one-pass) BPM sums are hybrid. Disjoint pairs - about three quarters of them
+#   in practice - are read straight off the pathway pair matrix pair = A_path @ pmat, which
+#   gives every pathway pair's block sum in one sparse-times-dense product. Only overlapping
+#   pairs go through the per-BPM sparse product on their stored set-difference lists. WPM and
+#   PATH statistics always use whole pathways (wpm['ind']), so they use A_path throughout.
+#
+#   BPM/WPM ranksum: for a fixed row pathway a, the block mm[P_a, :] and therefore the midranks
+#   of its stored values and its tie correction do not depend on the partner pathway b. They are
+#   computed ONCE per row pathway and reused across all of its partners; only the in/out split
+#   changes. See block_rank_context() / block_mw().
+#
+#   PATH degree: dist_in/dist_out always partition the same vector (sumMM, or a permutation of
+#   it), so the midranks and tie correction are computed once and the per-pathway statistic is
+#   just a rank sum, i.e. P.T @ ranks. Exact, not an approximation.
+#
+#   call_chi2 is a closed-form vectorized 2x2 chi-square instead of bpm_size calls into
+#   scipy.stats.chi2_contingency, and takes the four count columns directly so the (bpm_size x 4)
+#   stacked tables are never materialized.
+#
+#   Worker data sharing is by fork() copy-on-write: publish_shared() installs the read-only
+#   arrays on the module before the pool is created, so A is shared, not copied per worker.
+#
+# BEHAVIOUR NOTES
+#   - BPM pathway ids come from path1names/path2names matched against wpm['pathway'], which is
+#     exact and vectorized. Row position cannot be used: the BPM list is a subset of the upper
+#     triangle once pairs have been filtered upstream by size.
+#   - A BPM's ind1size is the size of a SET DIFFERENCE, not of a pathway. ind1size ==
+#     wpm['indsize'][idx1] is therefore the test for "these two pathways do not overlap", and
+#     is what selects the fast path for the observed sums.
+#   - Empirical p-values are reproducible and prefix-stable. Permutation k is drawn from
+#     SeedSequence(seed, spawn_key=(k,)), so it depends only on the seed and on k - not on
+#     snpPerms, n_workers or n_jobs. A 20-permutation run reproduces the first 10 permutations
+#     of a 10-permutation run with the same seed. Permutations do NOT compound (each is an
+#     independent draw), unlike the original, which reassigned mmtmp and so walked the symmetric
+#     group. Each draw was marginally uniform either way, so the sampled distribution is
+#     unchanged; only the sequence differs.
 #   - Tables that are not valid contingency tables return p = 1 from call_chi2 rather than
-#     raising (as chi2_contingency did) or reporting spurious significance. This covers a zero
-#     marginal and, importantly, any negative count - see call_chi2().
-#   - density_wpm for *non-kept* WPMs still carries the value computed from the binarized
-#     network even when binary_flag is False. That is what the original did (the non-binary
-#     branch reassigned a misspelled local) and downstream code may depend on it, so it is
-#     preserved deliberately rather than "fixed".
-#   - ind2keep_bpm follows the original exactly, including the non-binary branch's narrowing
-#     to (bpm_local >= -log10(0.05)) and the recomputation of bpmind1/bpmind2 from that
-#     narrowed mask. Note the thresholds here differ from the serial genstats.py sibling
-#     (that one uses -log10(0.05) and `> minPath` at the chi2 stage); this file follows
-#     genstats_perm.py: -log10(0.1) and `>= minPath`.
+#     raising (as chi2_contingency did) or reporting spurious significance. See call_chi2().
+#   - net_density now actually applies. The quantile cutoffs were previously computed, used only
+#     for a warning, and then discarded (both networks were binarized at 0 regardless, which is
+#     a no-op when every stored value is positive).
 #
 # INPUTS:
 #   ssmFile: Interaction networks file in the pickle format.
-#   bpmfile: files containing SNP ids for BPM/WPMs in pickle format.
 #   binary_flag: If True, interaction scores are binarized for computing BPM/WPM/PATH significances
-#   snpPerms: Number of snp permutations used for computing empirical p-values
-#   minPath: minimum size for a pathway to be considered as WPM and in BPM.
-#   n_jobs: number of sequential chunks the BPM passes are split into (lower peak RAM)
+#   snp_perms: Number of snp permutations used for computing empirical p-values
+#   n_jobs: number of sequential chunks the big passes are split into (lower peak RAM)
 #   n_workers: number of parallel cpu cores the program shoud use (higher throughput)
+#   seed: RNG seed for the SNP permutation stage
 #
 # OUTPUTS:
 #   genstats_<ssmFile without extension>.pkl - This pickle file contains a GenstasOut class, which itself contains 2 Stats class oject
@@ -89,22 +97,22 @@ np.seterr(divide='ignore', invalid='ignore')
 
 
 class perm_args:
-    def __init__(self, skip, count):
-        self.skip = skip
-        self.count = count
+    def __init__(self, lo, hi):
+        self.lo = lo
+        self.hi = hi
 
 class par_rank_args:
-    def __init__(self, id, rows):
+    def __init__(self, id, rows=None, groups=None):
         self.id = id
-        self.rows = np.asarray(rows, dtype=np.int64)
+        self.rows = None if rows is None else np.asarray(rows, dtype=np.int64)
+        self.groups = groups
 
 
 # ---------------------------------------------------------------------------
 # worker data sharing
 # ---------------------------------------------------------------------------
-# Replaces init_worker()/init_worker_perm(). Called in the *parent* before the pool is
-# created; children inherit the objects through fork() copy-on-write, so nothing large is
-# pickled per job and nothing is copied per worker.
+# Called in the *parent* before the pool is created; children inherit the objects through
+# fork() copy-on-write, so nothing large is pickled per job and nothing is copied per worker.
 
 _SHARED = {}
 
@@ -131,8 +139,19 @@ def as_sparse(mm):
     return out
 
 def binarize(mm, threshold):
-    """Sparse equivalent of `mm[mm>=threshold] = 1; mm[mm<1] = 0`."""
+    """Set every stored value >= threshold to 1 and drop the rest.
+
+    Only the STORED entries are touched, so a structural zero stays zero whatever the
+    threshold is. This is deliberately NOT the dense `mm[mm>=threshold] = 1` for a threshold
+    of 0 or less: that expression would promote the zeros too and densify to an all-ones
+    (s x s) matrix. For a positive threshold the two agree exactly, which is the case that
+    matters for the 0.2 score cutoff and for the netDensity quantile cutoffs.
+
+    Explicitly stored zeros are removed first, so `threshold=0` means "keep every nonzero
+    entry" regardless of whether the caller has already canonicalized the matrix.
+    """
     out = mm.copy()
+    out.eliminate_zeros()
     out.data = (out.data >= threshold).astype(np.float64)
     out.eliminate_zeros()
     return out
@@ -169,77 +188,124 @@ def indicator_matrix(index_lists, s):
     data = np.ones(rows.size, dtype=np.float64)
     return csr_array((data, (rows, cols)), shape=(s, n))
 
+def as_index(x):
+    """A SNP index list as a contiguous int64 array (a no-op when it already is one)."""
+    return np.asarray(x, dtype=np.int64).ravel()
+
 def block_sums(mm, u1, u2):
-    """Column-wise sum(mm[ind1_j, :][:, ind2_j]) for paired indicator columns u1/u2."""
+    """Column-wise sum(mm[R_j, :][:, C_j]) for paired indicator columns u1/u2."""
     if u1.shape[1] == 0:
         return np.zeros(0)
     return np.asarray((mm @ u2).multiply(u1).sum(axis=0)).ravel()
 
-def tiled_block_sums(mm, u1_tiles, u2_tiles, out, row_perm=None):
-    """block_sums over pre-tiled indicator columns, optionally permuting the column side.
-
-    row_perm is applied to the rows of the u2 tiles, which is equivalent to permuting the
-    columns of mm (see refactor notes) but costs a reindex instead of rebuilding mm.
-    """
-    off = 0
-    for u1t, u2t in zip(u1_tiles, u2_tiles):
-        k = u1t.shape[1]
-        u2p = u2t if row_perm is None else u2t[row_perm, :]
-        out[off:off + k] = block_sums(mm, u1t, u2p)
-        off += k
+def set_totals(values, sets, n_jobs):
+    """sum(values[S]) for each set S, in n_jobs sequential chunks."""
+    out = np.zeros(len(sets))
+    for chunk in split_indices(np.arange(len(sets)), n_jobs):
+        u = indicator_matrix([sets[k] for k in chunk], values.size)
+        out[chunk] = np.asarray(u.T @ values).ravel()
     return out
 
-def tile_indicators(u, n_parts):
-    """Split the indicator columns into n_parts subsets of BPMs.
+def dedupe_sets(sets):
+    """Map each SNP index list to an id over the DISTINCT lists.
 
-    This is what n_jobs controls in the permutation stage: each sparse product then handles
-    1/n_parts of the BPMs, so the (s x subset) intermediate - the peak allocation - shrinks
-    proportionally. The permutation itself is untouched; the same q feeds every subset.
+    Pairs with disjoint pathways share a row set (the pathway itself), so this is what keeps A
+    to roughly n_path + (number of overlapping kept pairs) rows instead of one row per BPM.
     """
-    k = u.shape[1]
-    if k == 0:
-        return []
-    tile = max(1, math.ceil(k / max(int(n_parts), 1)))
-    return [u[:, lo:lo + tile] for lo in range(0, k, tile)]
+    lut = {}
+    ids = np.empty(len(sets), dtype=np.int64)
+    distinct = []
+    for k, x in enumerate(sets):
+        key = x.tobytes()
+        r = lut.get(key)
+        if r is None:
+            r = len(distinct)
+            lut[key] = r
+            distinct.append(x)
+        ids[k] = r
+    return ids, distinct
+
+def row_set_sums(mm, row_sets, n_jobs):
+    """A[r, j] = sum_{i in row_sets[r]} mm[i, j], dense (len(row_sets) x s).
+
+    Built in n_jobs sequential chunks so the sparse intermediate - which is close to fully
+    dense at these network densities - never exists for all row sets at once.
+    """
+    n = len(row_sets)
+    s = mm.shape[1]
+    A = np.empty((n, s), dtype=np.float64)
+    for chunk in split_indices(np.arange(n), n_jobs):
+        u = indicator_matrix([row_sets[r] for r in chunk], s)
+        A[chunk, :] = (u.T @ mm).toarray()
+    return A
+
+def flat_gather_plan(row_ids, col_sets, s):
+    """Index arrays that turn "sum_{j in C_t} A[r_t, q[j]]" into a take + reduceat.
+
+    Lays each BPM's column SNP list out end to end alongside the flat offset r_t*s of its row
+    in A. A permuted block sum is then A.ravel().take(row_base + q.take(col_idx)) reduced at
+    `starts`. The column lists are used verbatim, so set differences need no special handling.
+    """
+    n = len(col_sets)
+    if n == 0:
+        z = np.zeros(0, dtype=np.int64)
+        return z, z, z
+    lens = np.fromiter((c.size for c in col_sets), dtype=np.int64, count=n)
+    if np.any(lens == 0):
+        raise ValueError("flat_gather_plan: a kept BPM/WPM has an empty column set; "
+                         "np.add.reduceat cannot express an empty segment")
+    starts = np.zeros(n, dtype=np.int64)
+    np.cumsum(lens[:-1], out=starts[1:])
+    col_idx = np.concatenate(col_sets)
+    row_base = np.repeat(np.asarray(row_ids, dtype=np.int64) * s, lens)
+    return col_idx, row_base, starts
+
+def permuted_block_sums(A_flat, col_idx, row_base, starts, q=None):
+    """Block sums for the pairs described by a flat_gather_plan, under SNP permutation q."""
+    if starts.size == 0:
+        return np.zeros(0)
+    cols = col_idx if q is None else q.take(col_idx)
+    return np.add.reduceat(A_flat.take(row_base + cols), starts)
 
 
 # ---------------------------------------------------------------------------
 # statistics helpers
 # ---------------------------------------------------------------------------
 
-def call_chi2(table):
+def call_chi2(a, b, c, d, ignore=None):
     """Vectorized 2x2 chi-square, no continuity correction.
 
-    Input format (per row): f11(bpm interactions) - f10(non-bpm interactions) -
-    f01(bpm non-interactions) - f00(non-bpm non-interactions), i.e. [[f11,f10],[f01,f00]].
-    Matches scipy.stats.chi2_contingency(obs, correction=False) for well-formed tables.
+    Arguments are the four count columns: a = f11 (bpm interactions), b = f10 (non-bpm
+    interactions), c = f01 (bpm non-interactions), d = f00 (non-bpm non-interactions), i.e.
+    [[a,b],[c,d]]. Matches scipy.stats.chi2_contingency(obs, correction=False) for well-formed
+    tables. `ignore` marks rows whose result is discarded downstream, so they are excluded from
+    the negative-count warning only.
 
-    Rows that are not a valid contingency table return p = 1, i.e. "no evidence of
-    enrichment", which is the only defensible answer for a test of whether interactions
-    differ from expectation. Three cases:
-      - f11 == 0: the original short-circuited to p = 1 here, so this is unchanged.
-      - a zero row/column marginal: chi2_contingency raised ValueError; the closed form
-        divides by zero and yields inf/nan. Only reachable if a region is fully saturated.
+    Rows that are not a valid contingency table return p = 1, i.e. "no evidence of enrichment",
+    which is the only defensible answer for a test of whether interactions differ from
+    expectation. Three cases:
+      - a == 0: the original short-circuited to p = 1 here, so this is unchanged.
+      - a zero row/column marginal: chi2_contingency raised ValueError; the closed form divides
+        by zero and yields inf/nan. Only reachable if a region is fully saturated.
       - ANY NEGATIVE COUNT: chi2_contingency also raised here. The closed form would happily
         return a tiny p-value (a negative cell inflates the |ad - bc| numerator while the
         denominator stays positive), reporting a malformed table as maximally significant.
-        That is meaningless, so these are forced to p = 1 and reported. A negative count
-        signals an upstream size/convention bug - e.g. wpmnotgi = wpmsize - wpmgi going
-        negative if wpmsize counts unordered pairs while wpmgi (a full block sum) counts
-        ordered ones. bpmnotgi is clamped upstream; wpmnotgi is not.
+        That is meaningless, so these are forced to p = 1 and reported. A negative count signals
+        an upstream size/convention bug - e.g. wpmnotgi = wpmsize - wpmgi going negative if
+        wpmsize counts unordered pairs while wpmgi (a full block sum) counts ordered ones.
+        bpmnotgi is clamped upstream; wpmnotgi is not.
     """
-    table = np.asarray(table, dtype=np.float64)
-    a, b, c, d = table[:, 0], table[:, 1], table[:, 2], table[:, 3]
     n = a + b + c + d
     with np.errstate(divide='ignore', invalid='ignore'):
         stat = n * (a * d - b * c) ** 2 / ((a + b) * (c + d) * (a + c) * (b + d))
     results = chi2.sf(stat, 1)
 
-    negative = np.any(table < 0, axis=1)
+    negative = (a < 0) | (b < 0) | (c < 0) | (d < 0)
     invalid = ~np.isfinite(stat) | (a == 0) | negative
     results[invalid] = 1.0
 
-    n_neg = int(np.count_nonzero(negative))
+    reportable = negative if ignore is None else (negative & ~ignore)
+    n_neg = int(np.count_nonzero(reportable))
     if n_neg:
         print(f"\twarning: {n_neg} chi2 table row(s) contained a negative count and were set "
               f"to p=1; check the size vs interaction-count pair conventions upstream", flush=True)
@@ -256,10 +322,9 @@ def tie_sum(values):
 def mw_greater(rank_sum_in, n_in, n_out, ties):
     """Normal-approximation Mann-Whitney p-value, alternative='greater', continuity corrected.
 
-    Same formula as the original ranksum() helper and as
-    scipy.stats.mannwhitneyu(..., use_continuity=True, alternative='greater'), but driven by a
-    precomputed midrank sum so the ranking can be shared across pathways/permutations.
-    Accepts scalars or arrays.
+    Same formula as scipy.stats.mannwhitneyu(..., use_continuity=True, alternative='greater'),
+    but driven by a precomputed midrank sum so the ranking can be shared across pathways and
+    permutations. Accepts scalars or arrays.
     """
     n_in = np.asarray(n_in, dtype=np.float64)
     n_out = np.asarray(n_out, dtype=np.float64)
@@ -272,125 +337,113 @@ def mw_greater(rank_sum_in, n_in, n_out, ties):
     p = np.where(np.isfinite(p) & (var > 0), p, 1.0)
     return p if p.ndim else float(p)
 
-def mw_greater_sparse(nz_in, n_in, nz_out, n_out):
-    """Mann-Whitney for two groups whose unstored entries are all zeros.
+def block_rank_context(block, s):
+    """Rank the stored values of mm[P_a, :] once, for reuse across every partner pathway.
 
-    nz_in/nz_out are the *stored* (nonzero, positive) values; n_in/n_out are the true group
-    sizes. Zeros form one big tie group at the bottom of the ranking, so the statistic is
-    exact without ever materializing the zeros.
+    The in-group and out-group always partition the same block, whose population is |P_a| * s
+    regardless of the partner. So the unstored entries are one tie group of zeros at the bottom
+    of the ranking, and both the midranks and the tie correction are partner-independent.
     """
-    z_in = float(n_in) - nz_in.size
-    z_out = float(n_out) - nz_out.size
-    z_tot = z_in + z_out
-
-    pooled = np.concatenate((nz_in, nz_out)) if nz_out.size else nz_in
-    if pooled.size:
-        ranks = rankdata(pooled) + z_tot
-        rank_sum_in = float(ranks[:nz_in.size].sum())
-    else:
-        rank_sum_in = 0.0
-    rank_sum_in += z_in * (z_tot + 1.0) / 2.0
-
-    ties = tie_sum(pooled)
+    data = block.data
+    z_tot = float(block.shape[0]) * float(s) - data.size
+    ranks = rankdata(data) + z_tot
+    ties = tie_sum(data)
     if z_tot > 1:
         ties += z_tot ** 3 - z_tot
-    return mw_greater(rank_sum_in, n_in, n_out, ties)
+    return ranks, ties, z_tot
 
-def ranksum(x, y):
-    """Kept for API compatibility: x is in the bpm, y is out of the bpm."""
-    pooled = np.concatenate((y, x))
-    ranks = rankdata(pooled)
-    return mw_greater(float(ranks[y.shape[0]:].sum()), x.shape[0], y.shape[0], tie_sum(pooled))
+def block_mw(ranks, ties, z_tot, inside, n_in, n_out):
+    """Mann-Whitney p-value for one partner, given a block_rank_context and the in-group mask."""
+    rank_sum_in = float(ranks[inside].sum())
+    z_in = float(n_in) - float(np.count_nonzero(inside))
+    rank_sum_in += z_in * (z_tot + 1.0) / 2.0
+    return mw_greater(rank_sum_in, n_in, n_out, ties)
 
 def split_indices(rows, n_parts):
     """Split into at most n_parts non-empty contiguous pieces."""
     return [part for part in np.array_split(np.asarray(rows), max(int(n_parts), 1)) if part.size]
+
+def group_by_row(row_ids):
+    """Group positions by their row pathway: [(a, positions), ...], one entry per distinct a."""
+    if row_ids.size == 0:
+        return []
+    order = np.argsort(row_ids, kind='stable')
+    sorted_ids = row_ids[order]
+    edges = np.flatnonzero(np.r_[True, sorted_ids[1:] != sorted_ids[:-1], True])
+    return [(int(sorted_ids[edges[k]]), order[edges[k]:edges[k + 1]])
+            for k in range(edges.size - 1)]
 
 
 # ---------------------------------------------------------------------------
 # parallel workers
 # ---------------------------------------------------------------------------
 
-def bpm_chi2_parallel(job_arg):
-    """bpmgi / path1bggi / path2bggi for a slice of BPMs (binarized network)."""
-    mm = _SHARED['mm']
-    sumMM = _SHARED['sumMM']
-    ind1 = _SHARED['ind1']
-    ind2 = _SHARED['ind2']
-    keep = _SHARED['tr_keep']
+def bpm_block_parallel(job_arg):
+    """Block sum and the two sumMM totals for a slice of BPMs, from their stored SNP lists.
 
-    rows = job_arg.rows
-    bpmgi = np.zeros(rows.size)
-    path1bggi = np.zeros(rows.size)
-    path2bggi = np.zeros(rows.size)
-
-    valid = keep[rows]
-    if valid.any():
-        sel = rows[valid]
-        u1 = indicator_matrix([ind1[i] for i in sel], mm.shape[0])
-        u2 = indicator_matrix([ind2[i] for i in sel], mm.shape[0])
-        gi = block_sums(mm, u1, u2)
-        bpmgi[valid] = gi
-        path1bggi[valid] = np.asarray(u1.T @ sumMM).ravel() - gi
-        path2bggi[valid] = np.asarray(u2.T @ sumMM).ravel() - gi
-    return bpmgi, path1bggi, path2bggi
-
-def parallel_ranksum(job_arg):
-    """bpmsum + ranksum p-value for a slice of the kept BPMs (non-binary network)."""
-    mm = _SHARED['mm']
-    bpmind1 = _SHARED['bpmind1']
-    bpmind2 = _SHARED['bpmind2']
-    s = mm.shape[1]
-
-    rows = job_arg.rows
-    bpmsum_tmp = np.zeros(rows.size)
-    bpm_local_tmp = np.ones(rows.size)
-    mask = np.zeros(s, dtype=bool)
-
-    for k, i in enumerate(rows):
-        id1 = np.asarray(bpmind1[i], dtype=np.int64)
-        id2 = np.asarray(bpmind2[i], dtype=np.int64)
-        if id1.size < 5 or id2.size < 5:
-            continue  # bpmsum 0 / p-value 1, as the old `tr` bookkeeping did
-
-        block = mm[id1, :]
-        mask[id2] = True
-        inside = mask[block.indices]
-        mask[id2] = False
-
-        nz_in = block.data[inside]
-        nz_out = block.data[~inside]
-        n_in = id1.size * id2.size
-        n_out = id1.size * (s - id2.size)
-
-        bpmsum_tmp[k] = nz_in.sum()
-        bpm_local_tmp[k] = mw_greater_sparse(nz_in, n_in, nz_out, n_out)
-    return bpmsum_tmp, bpm_local_tmp
-
-def snp_permutation_parallel(perm_args):
-    """Run `share` SNP permutations and return exceedance counts for BPM/WPM/PATH.
-
-    The permutation SEQUENCE reproduces the original bit for bit. Two details make that work:
-
-    1. The RNG is the legacy global MT19937, seeded per worker as seed + id * 1000, drawing
-       exactly one np.random.permutation(s) per iteration. Switching to np.random.default_rng
-       would draw a different sequence even from the same nominal seed.
-
-    2. The original wrote `mmtmp = mmtmp[:, np.random.permutation(...)]`, REASSIGNING mmtmp, so
-       the permutations compound: iteration k operates on mm[:, q_k] where q_k = q_{k-1}[p_k]
-       and q_0 = arange(s). Each q_k is still marginally uniform (so the sampled distribution
-       was never wrong), but the sequence is a random walk on the symmetric group rather than
-       k independent draws. Carrying q forward here reproduces it; drawing fresh permutations
-       agrees only on the first iteration.
-
-    Given q, the column-permuted block sum is obtained by gathering the rows of the
-    column-side indicator matrix with argsort(q), and the permuted column sums are just the
-    original column sums reindexed by q.
+    Used only for pairs whose pathways OVERLAP, where the block is over set differences and the
+    pathway pair matrix does not apply.
     """
     mm = _SHARED['mm']
-    u1_tiles = _SHARED['u1_tiles']
-    u2_tiles = _SHARED['u2_tiles']
-    pw = _SHARED['pw']
+    sumMM = _SHARED['sumMM']
+    rows = _SHARED['rows']
+    cols = _SHARED['cols']
+
+    sel = job_arg.rows
+    u1 = indicator_matrix([rows[i] for i in sel], mm.shape[0])
+    u2 = indicator_matrix([cols[i] for i in sel], mm.shape[0])
+    gi = block_sums(mm, u1, u2)
+    return gi, np.asarray(u1.T @ sumMM).ravel(), np.asarray(u2.T @ sumMM).ravel()
+
+def parallel_ranksum(job_arg):
+    """bpmsum + ranksum p-value for a set of row-set groups (non-binary network).
+
+    One mm[R, :] slice and one ranking serve every BPM sharing the row set R, which for disjoint
+    pathway pairs is every BPM built on that pathway.
+    """
+    mm = _SHARED['mm']
+    row_sets = _SHARED['row_sets']
+    cols = _SHARED['cols']
+    s = mm.shape[1]
+
+    positions = []
+    sums = []
+    pvals = []
+    mask = np.zeros(s, dtype=bool)
+
+    for r, pos in job_arg.groups:
+        id1 = row_sets[r]
+        if id1.size < 5:
+            continue                      # bpmsum 0 / p-value 1, as the old `tr` bookkeeping did
+        block = mm[id1, :]
+        ranks, ties, z_tot = block_rank_context(block, s)
+        indices = block.indices
+        for t in pos:
+            id2 = cols[t]
+            if id2.size < 5:
+                continue
+            mask[id2] = True
+            inside = mask[indices]
+            mask[id2] = False
+            positions.append(t)
+            sums.append(block.data[inside].sum())
+            pvals.append(block_mw(ranks, ties, z_tot, inside,
+                                  id1.size * id2.size, id1.size * (s - id2.size)))
+
+    return (np.asarray(positions, dtype=np.int64),
+            np.asarray(sums, dtype=np.float64),
+            np.asarray(pvals, dtype=np.float64))
+
+def snp_permutation_parallel(job_arg):
+    """Run permutations [lo, hi) and return exceedance counts for BPM/WPM/PATH.
+
+    Permutation k comes from SeedSequence(seed, spawn_key=(k,)), so it is addressed by index:
+    a worker jumps straight to its slice with no fast-forward, the split across workers is
+    free to change, and extending snp_perms leaves the earlier permutations untouched.
+    """
+    A_flat = _SHARED['A_flat']
+    bpm_plan = _SHARED['bpm_plan']
+    wpm_plan = _SHARED['wpm_plan']
     ppath = _SHARED['ppath']
     bpmsum_obs = _SHARED['bpmsum_obs']
     wpmsum_obs = _SHARED['wpmsum_obs']
@@ -399,44 +452,27 @@ def snp_permutation_parallel(perm_args):
     col_ties = _SHARED['col_ties']
     path_lens = _SHARED['path_lens']
     seed = _SHARED['seed']
-    s = mm.shape[0]
-
-    # ONE canonical stream, seeded the same way regardless of n_workers or n_jobs, so the
-    # permutations - and therefore the empirical p-values - are reproducible on any hardware.
-    # This is exactly the stream the original produced when run with n_workers=1.
-    rng = np.random.default_rng(seed)
+    s = _SHARED['s']
 
     count_bpm = np.zeros(bpmsum_obs.size)
     count_wpm = np.zeros(wpmsum_obs.size)
     count_path = np.zeros(path_obs.size)
-
-    bpmsum_tmp = np.empty(bpmsum_obs.size)
     n_out_path = s - path_lens
 
-    q_init = np.arange(s)  # cumulative permutation, matching the original's reassignment of mmtmp
+    for k in range(job_arg.lo, job_arg.hi):
+        rng = np.random.default_rng(np.random.SeedSequence(entropy=seed, spawn_key=(k,)))
+        q = rng.permutation(s)
 
-    # Advance to this piece's start by drawing and composing the permutations it is not
-    # evaluating. A draw is well under 1% of an evaluated iteration, so this is close to free,
-    # and it means the stream is identical to a worker that ran the whole share end to end.
-    for _ in range(perm_args.skip):
-        rng.permutation(s)
+        # BPM: permuting mm's columns is a gather on the BPM's own column SNP list
+        if bpmsum_obs.size:
+            count_bpm += permuted_block_sums(A_flat, *bpm_plan, q=q) > bpmsum_obs
 
-    for perm in range(perm_args.count):
-        q = q_init[rng.permutation(s)]
-        inv = np.empty(s, dtype=np.int64)      # inverse by scatter: O(s), not O(s log s)
-        inv[q] = np.arange(s, dtype=np.int64)
-
-        # BPM: permuting mm's columns == permuting the rows of the column-side indicators
-        tiled_block_sums(mm, u1_tiles, u2_tiles, bpmsum_tmp, row_perm=inv)
-        count_bpm += bpmsum_tmp > bpmsum_obs
-
-        # WPM: same block on both sides, so the same trick applies
+        # WPM: whole pathway on both sides, so the same gather applies
         if wpmsum_obs.size:
-            wpmsum_tmp = block_sums(mm, pw, pw[inv, :])
-            count_wpm += wpmsum_tmp > wpmsum_obs
+            count_wpm += permuted_block_sums(A_flat, *wpm_plan, q=q) > wpmsum_obs
 
-        # PATH degree: the permuted column sums are a permutation of the original ones, so
-        # the midranks are known up front and the statistic reduces to a rank sum.
+        # PATH degree: the permuted column sums are a permutation of the original ones, so the
+        # midranks are known up front and the statistic reduces to a rank sum.
         if path_obs.size:
             rank_in = np.asarray(ppath.T @ col_ranks[q]).ravel()
             p = mw_greater(rank_in, path_lens, n_out_path, col_ties)
@@ -453,37 +489,71 @@ def snp_permutation_parallel(perm_args):
 def init_worker():
     # Ignore SIGINT in worker processes; only the main process should handle it
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-        
-def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_workers, seed):
+
+def bpm_pathway_ids(bpm, wpm):
+    """Pathway index pair for every BPM row, from path1names/path2names.
+
+    Row position cannot be used: once pairs have been filtered upstream by size the BPM list is
+    a subset of np.triu_indices, not the whole of it. Matching names is exact and vectorized
+    (~0.3 s at a few million rows).
+    """
+    for column in ('path1names', 'path2names'):
+        if column not in bpm:
+            raise ValueError(f"the BPM table has no '{column}' column, so its pathway pairs "
+                             f"cannot be identified; columns present: {list(bpm.columns)}")
+    names = pd.Index(wpm['pathway'].values)
+    if not names.is_unique:
+        raise ValueError("wpm['pathway'] contains duplicate names, so a BPM's pathways cannot "
+                         "be identified unambiguously")
+    idx1 = names.get_indexer(bpm['path1names'].values)
+    idx2 = names.get_indexer(bpm['path2names'].values)
+    missing = (idx1 < 0) | (idx2 < 0)
+    if missing.any():
+        raise ValueError(f"{int(missing.sum()):,} BPM row(s) name a pathway that is not in the "
+                         f"WPM table; the BPM and WPM tables must come from the same BPMind file")
+    return idx1.astype(np.int32), idx2.astype(np.int32)
+
+
+def rungenstats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed):
     # inputs:
     # - input_network: scipy.sparse interaction network (csr_array)
-    # - bpm: bpm dataframe
-    # - wpm: wpm dataframe
+    # - bpm: bpm dataframe (ind1/ind2 are SET DIFFERENCES: P_a \ P_b and P_b \ P_a)
+    # - wpm: wpm dataframe (ind is the whole pathway)
     # - binary_flag: flag to make the interaction network binary
     # - n_jobs: sequential work chunks (RAM), n_workers: pool width (speed)
     # - seed: RNG seed for the SNP permutation stage
 
     n_jobs = max(int(n_jobs), 1)
     n_workers = max(int(n_workers), 1)
-    ctx = mp.get_context('fork')  # workers read the sparse structures copy-on-write
+    ctx = mp.get_context('fork')  # workers read the shared arrays copy-on-write
 
     mm_scores = as_sparse(input_network)
     s = mm_scores.shape[0]
 
     bpm_size = bpm['size'].values.shape[0]
     bpmsize = bpm['size'].values
-    ind1 = bpm['ind1'].values
-    ind2 = bpm['ind2'].values
+    ind1 = [as_index(x) for x in bpm['ind1'].values]
+    ind2 = [as_index(x) for x in bpm['ind2'].values]
     bpmind1size = bpm['ind1size'].values
     bpmind2size = bpm['ind2size'].values
 
     wpm_size = wpm['size'].values.shape[0]
     wpmsize = wpm['size'].values
     wpmindsize = wpm['indsize'].values
-    ind = wpm['ind'].values
+
+    # pathway SNP lists, and the pathway pair each BPM row refers to
+    path_lists = [as_index(x) for x in wpm['ind'].values]
+    path_lens = np.fromiter((p.size for p in path_lists), dtype=np.int64,
+                            count=wpm_size).astype(np.float64)
+    pmat = indicator_matrix(path_lists, s)
+    idx1, idx2 = bpm_pathway_ids(bpm, wpm)
+
+    # A BPM whose stored lists are the full pathways has no overlap to correct for, so its
+    # block sum is just the pathway pair's. Everything else needs its own lists.
+    disjoint = (bpmind1size == path_lens[idx1]) & (bpmind2size == path_lens[idx2])
 
     # ?Binary  -- mm is the binarized network used for the chi2 stage; mm_scores is kept
-    # alongside it instead of being np.copy()'d (both are sparse, so this is cheap).
+    # alongside it instead of being copied (both are sparse, so this is cheap).
     if binary_flag:
         # if true, then the network was already binarized with present or not present
         mm = mm_scores
@@ -495,63 +565,65 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
 
     sumMM = np.asarray(mm.sum(axis=1)).ravel()
 
-    # pathway indicator matrix: column a marks the SNPs of pathway a. Reused for every WPM
-    # and PATH statistic below, observed and permuted.
-    path_lists = [ np.asarray(x, dtype=np.int64).ravel() for x in ind ]
-    path_lens = np.fromiter((p.size for p in path_lists), dtype=np.int64, count=wpm_size).astype(np.float64)
-    pmat = indicator_matrix(path_lists, s)
-
     # -------------------------------------------------
     # BPM binary chi2
     # -------------------------------------------------
     print("\tBPM chi2: ", end="", flush=True)
     t1 = datetime.now()
-    # bpm genetic interaction counts + background interactions, in n_jobs sequential chunks
-    # of n_workers parallel slices. `tr` is now a mask instead of an O(n^2) `in` test.
+    # `tr` is a mask instead of an O(n^2) `in` test
     tr_mask = (bpmind1size < 5) | (bpmind2size < 5)
-    publish_shared(mm=mm, sumMM=sumMM, ind1=ind1, ind2=ind2, tr_keep=~tr_mask)
+
+    # One pathway-by-pathway product gives every DISJOINT pair's block sum at once; the
+    # diagonal of the same product is the WPM block sum.
+    A_path = row_set_sums(mm, path_lists, n_jobs)
+    pair = np.asarray(A_path @ pmat)
+    path_sumMM = np.asarray(pmat.T @ sumMM).ravel()
 
     bpmgi = np.zeros(bpm_size)
-    path1bggi = np.zeros(bpm_size)
-    path2bggi = np.zeros(bpm_size)
+    tot1 = np.zeros(bpm_size)
+    tot2 = np.zeros(bpm_size)
 
+    fast = disjoint & ~tr_mask
+    bpmgi[fast] = pair[idx1[fast], idx2[fast]]
+    tot1[fast] = path_sumMM[idx1[fast]]
+    tot2[fast] = path_sumMM[idx2[fast]]
+
+    # overlapping pairs: the block is over set differences, so use the stored lists
+    slow = np.flatnonzero(~disjoint & ~tr_mask)
+    publish_shared(mm=mm, sumMM=sumMM, rows=ind1, cols=ind2)
     pool = ctx.Pool(processes=n_workers, initializer=init_worker)
     try:
-        for chunk in split_indices(np.arange(bpm_size), n_jobs):
-            job_args = [par_rank_args(i, part) for i, part in enumerate(split_indices(chunk, n_workers))]
-            for j_arg, res in zip(job_args, pool.map(bpm_chi2_parallel, job_args)):
+        for chunk in split_indices(slow, n_jobs):
+            job_args = [par_rank_args(i, part)
+                        for i, part in enumerate(split_indices(chunk, n_workers))]
+            for j_arg, res in zip(job_args, pool.map(bpm_block_parallel, job_args)):
                 bpmgi[j_arg.rows] = res[0]
-                path1bggi[j_arg.rows] = res[1]
-                path2bggi[j_arg.rows] = res[2]
+                tot1[j_arg.rows] = res[1]
+                tot2[j_arg.rows] = res[2]
         pool.close()
         pool.join()
         clear_shared()
-        
+
     except KeyboardInterrupt:
         print("\nCtrl+C received — terminating worker pool...")
         pool.terminate()
         pool.join()
         sys.exit()
-        
+
+    path1bggi = tot1 - bpmgi
+    path2bggi = tot2 - bpmgi
+
     # bpm non interaction
     bpmnotgi = bpmsize - bpmgi
     bpmnotgi[bpmnotgi < 0] = 0
     # non-bpm non-interation
-    path1bgsize = bpmind1size * s
-    path2bgsize = bpmind2size * s
+    path1notgi = bpmind1size * s - path1bggi - bpmsize
+    path2notgi = bpmind2size * s - path2bggi - bpmsize
 
-    path1notgi = path1bgsize - path1bggi - bpmsize
-    path2notgi = path2bgsize - path2bggi - bpmsize
-
-    # call chi2
-    # build the tables
-    table1 = np.stack((bpmgi, path1bggi, bpmnotgi, path1notgi)).transpose()
-    table1[tr_mask, :] = 5
-    table2 = np.stack((bpmgi, path2bggi, bpmnotgi, path2notgi)).transpose()
-    table2[tr_mask, :] = 5
-    # call chi2
-    chi2_bpm_1 = np.log10(call_chi2(table1)) * -1.0
-    chi2_bpm_2 = np.log10(call_chi2(table2)) * -1.0
+    # call chi2 -- the four count columns are passed directly rather than stacked into
+    # (bpm_size x 4) tables, which at this bpm_size saves several hundred MB per table
+    chi2_bpm_1 = np.log10(call_chi2(bpmgi, path1bggi, bpmnotgi, path1notgi, ignore=tr_mask)) * -1.0
+    chi2_bpm_2 = np.log10(call_chi2(bpmgi, path2bggi, bpmnotgi, path2notgi, ignore=tr_mask)) * -1.0
     chi2_bpm_1[tr_mask] = 0
     chi2_bpm_2[tr_mask] = 0
 
@@ -576,19 +648,18 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
     chi2_bpm_local = np.zeros(bpm_size)
     chi2_bpm_local[dense_index == 1] = chi2_bpm_1[dense_index == 1]
     chi2_bpm_local[dense_index == 2] = chi2_bpm_2[dense_index == 2]
+    del chi2_bpm_1, chi2_bpm_2, density_bpm_local_1, density_bpm_local_2, under1, under2
 
     # keeping track of significant bpms
     ind2keep_bpm = (chi2_bpm_local >= (-1.0 * np.log10(0.1)))
 
-    # keeping denser pathway in ind1_new
+    # keeping denser pathway first. The SNP lists are swapped as references, and the pathway
+    # ids and sumMM totals are swapped alongside them so both stay consistent.
     swap = dense_index == 2
-    ind1_new = np.where(swap, ind2, ind1)
-    ind2_new = np.where(swap, ind1, ind2)
-    ind1size_new = np.where(swap, bpmind2size, bpmind1size)
-
-    # pairs to keep
-    bpmind1 = ind1_new[ind2keep_bpm]
-    bpmind2 = ind2_new[ind2keep_bpm]
+    row_sets = [ind2[i] if swap[i] else ind1[i] for i in range(bpm_size)]
+    col_sets = [ind1[i] if swap[i] else ind2[i] for i in range(bpm_size)]
+    idx1_new = np.where(swap, idx2, idx1)
+    ind1size_new = np.where(swap, bpmind2size, bpmind1size).astype(np.float64)
     print(f"{ind2keep_bpm.sum():,} passed - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
     # -------------------------------------------------
@@ -596,26 +667,21 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
     # -------------------------------------------------
     print("\tWPM chi2: ", end="", flush=True)
     t1 = datetime.now()
-    # one sparse product replaces the per-pathway loop; the diagonal of P.T @ mm @ P is
-    # exactly sum(mm[ind[i], :][:, ind[i]]).
-    wpmgi = block_sums(mm, pmat, pmat)
+    wpmgi = np.ascontiguousarray(np.diagonal(pair))
     wpmnotgi = wpmsize - wpmgi
     density_wpm = wpmgi / wpmsize
 
     # WPM background size and interactions
-    pathbggi = np.asarray(pmat.T @ sumMM).ravel() - wpmgi
-    pathbgsize = wpmindsize * s
-    pathbgnotgi = pathbgsize - pathbggi - wpmsize
+    pathbggi = path_sumMM - wpmgi
+    pathbgnotgi = wpmindsize * s - pathbggi - wpmsize
 
-    wpm_table = np.stack((wpmgi, pathbggi, wpmnotgi, pathbgnotgi)).transpose()
-
-    # call chi2
-    chi2_wpm = np.log10(call_chi2(wpm_table)) * -1
+    chi2_wpm = np.log10(call_chi2(wpmgi, pathbggi, wpmnotgi, pathbgnotgi)) * -1
 
     # consider under-enriched chi2s
     under_wpm = wpmgi / (wpmgi + wpmnotgi) < pathbggi / (pathbggi + pathbgnotgi)
     chi2_wpm[under_wpm] = -1 * chi2_wpm[under_wpm]
     ind2keep_wpm = (chi2_wpm >= -1 * np.log10(0.1))
+    del pair
     print(f"{ind2keep_wpm.sum():,} passed - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
     # -------------------------------------------------
@@ -625,11 +691,26 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
         # compute bpm interaction count and density for the remaining
         bpmsum = np.zeros(bpm_size)
         density_bpm = np.zeros(bpm_size)
+        keep_pos = np.flatnonzero(ind2keep_bpm)
 
-        u1_keep = indicator_matrix([np.asarray(x, dtype=np.int64) for x in bpmind1], s)
-        u2_keep = indicator_matrix([np.asarray(x, dtype=np.int64) for x in bpmind2], s)
-        bpmsum_tmp = np.zeros(bpmind1.shape[0])
-        tiled_block_sums(mm, tile_indicators(u1_keep, n_jobs), tile_indicators(u2_keep, n_jobs), bpmsum_tmp)
+        # the swapped block sum for the kept pairs, from their stored lists
+        bpmsum_tmp = np.zeros(keep_pos.size)
+        publish_shared(mm=mm, sumMM=sumMM, rows=row_sets, cols=col_sets)
+        pool = ctx.Pool(processes=n_workers, initializer=init_worker)
+        try:
+            for chunk in split_indices(np.arange(keep_pos.size), n_jobs):
+                parts = split_indices(chunk, n_workers)
+                job_args = [par_rank_args(i, keep_pos[part]) for i, part in enumerate(parts)]
+                for part, res in zip(parts, pool.map(bpm_block_parallel, job_args)):
+                    bpmsum_tmp[part] = res[0]
+            pool.close()
+            pool.join()
+            clear_shared()
+        except KeyboardInterrupt:
+            print("\nCtrl+C received — terminating worker pool...")
+            pool.terminate()
+            pool.join()
+            sys.exit()
 
         density_bpm[ind2keep_bpm] = bpmsum_tmp / bpmsize[ind2keep_bpm]
         bpmsum[ind2keep_bpm] = bpmsum_tmp
@@ -648,6 +729,7 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
         # restore non-binary mm
         mm = mm_scores
         sumMM = np.asarray(mm.sum(axis=1)).ravel()
+        path_sumMM = np.asarray(pmat.T @ sumMM).ravel()
         # -------------------------------------------------
         # BPM ranksum test
         # -------------------------------------------------
@@ -655,33 +737,38 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
         t1 = datetime.now()
         bpmsum = np.zeros(bpm_size)
         density_bpm = np.zeros(bpm_size)
-        n_keep = bpmind1.shape[0]
-        bpmsum_tmp = np.zeros(n_keep)
-        bpm_local_tmp = np.ones(n_keep)
+        keep_pos = np.flatnonzero(ind2keep_bpm)
+        bpmsum_tmp = np.zeros(bpm_size)
+        bpm_local_tmp = np.ones(bpm_size)
 
-        # parallel run for computing ranksum, in n_jobs sequential chunks
-        publish_shared(mm=mm, bpmind1=bpmind1, bpmind2=bpmind2)
+        # Grouped by ROW SET so each mm[R, :] slice and its ranking is built once and reused
+        # across every BPM sharing it (all disjoint pairs on a given pathway). Groups are dealt
+        # out round robin, which balances the pool better than contiguous slices when set sizes
+        # vary widely.
+        set_ids, distinct_rows = dedupe_sets([row_sets[i] for i in keep_pos])
+        groups = [(r, keep_pos[pos]) for r, pos in group_by_row(set_ids)]
+        publish_shared(mm=mm, row_sets=distinct_rows, cols=col_sets)
         pool = ctx.Pool(processes=n_workers, initializer=init_worker)
         try:
-            for chunk in split_indices(np.arange(n_keep), n_jobs):
-                job_args = [par_rank_args(i, part) for i, part in enumerate(split_indices(chunk, n_workers))]
-                for j_arg, res in zip(job_args, pool.map(parallel_ranksum, job_args)):
-                    bpmsum_tmp[j_arg.rows] = res[0]
-                    bpm_local_tmp[j_arg.rows] = res[1]
+            job_args = [par_rank_args(w, groups=groups[w::n_workers]) for w in range(n_workers)]
+            job_args = [j for j in job_args if j.groups]
+            for res in pool.map(parallel_ranksum, job_args):
+                bpmsum_tmp[res[0]] = res[1]
+                bpm_local_tmp[res[0]] = res[2]
             pool.close()
             pool.join()
             clear_shared()
-            
+
         except KeyboardInterrupt:
             print("\nCtrl+C received — terminating worker pool...")
             pool.terminate()
             pool.join()
             sys.exit()
 
-        density_bpm[ind2keep_bpm] = bpmsum_tmp / bpmsize[ind2keep_bpm]
+        density_bpm[ind2keep_bpm] = bpmsum_tmp[ind2keep_bpm] / bpmsize[ind2keep_bpm]
         bpm_local = np.zeros(bpm_size)
-        bpm_local[ind2keep_bpm] = -1 * np.log10(bpm_local_tmp)
-        bpmsum[ind2keep_bpm] = bpmsum_tmp
+        bpm_local[ind2keep_bpm] = -1 * np.log10(bpm_local_tmp[ind2keep_bpm])
+        bpmsum[ind2keep_bpm] = bpmsum_tmp[ind2keep_bpm]
         # update ind2keep_bpm
         ind2keep_bpm = (bpm_local >= -1 * np.log10(0.05))
         print(f"{ind2keep_bpm.sum():,} passed - {str(datetime.now() - t1).split('.')[0]}", flush=True)
@@ -694,19 +781,17 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
         density_wpm = np.zeros(wpm_size)
         wpmsum = np.zeros(wpm_size)
         wpm_local_tmp = np.ones(wpm_size)
-        kept_wpm = np.flatnonzero(ind2keep_wpm)
         mask = np.zeros(s, dtype=bool)
-        for a in kept_wpm:
+        for a in np.flatnonzero(ind2keep_wpm):
             id1 = path_lists[a]
             block = mm[id1, :]
+            ranks, ties, z_tot = block_rank_context(block, s)
             mask[id1] = True
             inside = mask[block.indices]
             mask[id1] = False
-            nz_in = block.data[inside]
-            nz_out = block.data[~inside]
-            wpmsum[a] = nz_in.sum()
-            wpm_local_tmp[a] = mw_greater_sparse(nz_in, id1.size * id1.size,
-                                                 nz_out, id1.size * (s - id1.size))
+            wpmsum[a] = block.data[inside].sum()
+            wpm_local_tmp[a] = block_mw(ranks, ties, z_tot, inside,
+                                        id1.size * id1.size, id1.size * (s - id1.size))
         density_wpm[ind2keep_wpm] = wpmsum[ind2keep_wpm] / wpmsize[ind2keep_wpm]
         wpm_local = np.zeros(wpm_size)
         wpm_local[ind2keep_wpm] = -1 * np.log10(wpm_local_tmp[ind2keep_wpm])
@@ -718,25 +803,19 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
     # -------------------------------------------------
     print("\tComputing expected densities ", end="", flush=True)
     t1 = datetime.now()
-    # Recomputed here, at the same point the original does it, so that the non-binary branch's
-    # narrowed ind2keep_bpm is reflected in the pairs used from here on (the permutation stage
-    # below in particular). Nothing between the branch and this line uses them.
-    bpmind1 = ind1_new[ind2keep_bpm]
-    bpmind2 = ind2_new[ind2keep_bpm]
-    
-    # compute expected bpm density -- vectorized per chunk instead of one gather per BPM
-    density_bpm_expected = np.zeros(bpm_size)
-    for chunk in split_indices(np.arange(bpm_size), n_jobs):
-        u = indicator_matrix([np.asarray(ind1_new[i], dtype=np.int64) for i in chunk], s)
-        lens = ind1size_new[chunk].astype(np.float64)
-        totals = np.asarray(u.T @ sumMM).ravel()
-        with np.errstate(divide='ignore', invalid='ignore'):
-            vals = totals / (s * lens)
-        density_bpm_expected[chunk] = np.where(lens > 0, vals, 0.0)
+    # sum(sumMM[row set]) for EVERY bpm - the original computes expected density for all of
+    # them, including the ones excluded from the chi2 test - against the final sumMM, which the
+    # non-binary branch has restored to the score network. Disjoint pairs read the pathway
+    # total directly; the rest are summed from their stored lists.
+    tot1_new = np.where(disjoint, path_sumMM[idx1_new], 0.0)
+    slow_new = np.flatnonzero(~disjoint)
+    for chunk in split_indices(slow_new, n_jobs):
+        tot1_new[chunk] = set_totals(sumMM, [row_sets[i] for i in chunk], 1)
 
-    # compute expected wpm density
     with np.errstate(divide='ignore', invalid='ignore'):
-        density_wpm_expected = np.asarray(pmat.T @ sumMM).ravel() / (s * path_lens)
+        density_bpm_expected = tot1_new / (s * ind1size_new)
+        density_wpm_expected = path_sumMM / (s * path_lens)
+    density_bpm_expected[ind1size_new == 0] = 0.0
     density_wpm_expected[path_lens == 0] = 0.0
 
     # path degree -- dist_in/dist_out always partition sumMM, so rank once and reuse
@@ -757,25 +836,37 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
     wpm_local_pv = np.ones(wpm_size)
     path_degree_pv = np.ones(wpm_size)
 
-    # bpmind1/bpmind2 already reflect the final ind2keep_bpm (recomputed above, as in the
-    # original), so the kept pairs, bpmsum baseline and count_bpm all have the same length.
-    u1_keep = indicator_matrix([np.asarray(x, dtype=np.int64) for x in bpmind1], s)
-    u2_keep = indicator_matrix([np.asarray(x, dtype=np.int64) for x in bpmind2], s)
+    # ind2keep_bpm is read here, after the non-binary branch may have narrowed it, so the kept
+    # pairs, the observed baseline and count_bpm all have the same length - as in the original,
+    # which recomputed bpmind1/bpmind2 at this point.
+    keep_pos = np.flatnonzero(ind2keep_bpm)
+    kept_wpm = np.flatnonzero(ind2keep_wpm)
 
-    # permuted block sums are compared against the observed ones on the same network
-    bpmsum_obs = np.zeros(bpmind1.shape[0])
-    tiled_block_sums(mm, tile_indicators(u1_keep, n_jobs), tile_indicators(u2_keep, n_jobs), bpmsum_obs)
-    pw = pmat[:, ind2keep_wpm]
-    wpmsum_obs = block_sums(mm, pw, pw)
+    # One dense A over the DISTINCT row sets of everything being permuted. Disjoint pairs share
+    # their pathway's row, so this is roughly n_path + (overlapping kept pairs) rows, not one
+    # row per BPM.
+    perm_rows = [row_sets[i] for i in keep_pos] + [path_lists[a] for a in kept_wpm]
+    row_ids, distinct_rows = dedupe_sets(perm_rows)
+    gb = len(distinct_rows) * s * 8 / 1e9
+    # print(f"[A: {len(distinct_rows):,} row sets x {s:,} SNPs = {gb:.1f} GB] ", end="", flush=True)
+    A_rows = row_set_sums(mm, distinct_rows, n_jobs)
+    A_flat = A_rows.ravel()
+
+    bpm_plan = flat_gather_plan(row_ids[:keep_pos.size], [col_sets[i] for i in keep_pos], s)
+    wpm_plan = flat_gather_plan(row_ids[keep_pos.size:], [path_lists[a] for a in kept_wpm], s)
+
+    # permuted block sums are compared against the observed ones on the same network, computed
+    # through the same gather so the two sides are numerically identical
+    bpmsum_obs = permuted_block_sums(A_flat, *bpm_plan)
+    wpmsum_obs = permuted_block_sums(A_flat, *wpm_plan)
 
     # the permutation compares against permuted *column* sums, so rank those
     col_sums = np.asarray(mm.sum(axis=0)).ravel()
 
     publish_shared(
-        mm=mm,
-        u1_tiles=tile_indicators(u1_keep, n_jobs),
-        u2_tiles=tile_indicators(u2_keep, n_jobs),
-        pw=pw,
+        A_flat=A_flat,
+        bpm_plan=bpm_plan,
+        wpm_plan=wpm_plan,
         ppath=pmat[:, ind2keep_path],
         bpmsum_obs=bpmsum_obs,
         wpmsum_obs=wpmsum_obs,
@@ -784,25 +875,18 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
         col_ties=tie_sum(col_sums),
         path_lens=path_lens[ind2keep_path],
         seed=seed,
+        s=s,
     )
 
-    count_bpm = np.zeros(bpmind1.shape[0])
-    count_wpm = np.zeros(int(np.sum(ind2keep_wpm)))
+    count_bpm = np.zeros(keep_pos.size)
+    count_wpm = np.zeros(kept_wpm.size)
     count_path = np.zeros(int(np.sum(ind2keep_path)))
-    # assign parallel job args -- the original split, preserved exactly: proc 0 takes the
-    # remainder, every other proc takes floor(snpPerms/n_workers). n_jobs is NOT applied here;
-    # any other split changes each worker's share and therefore its seed.
-    # snpPerms permutations are drawn from a single stream, so the work is split by simply
-    # cutting that stream into contiguous pieces. A piece advances to its start by drawing (not
-    # evaluating) the permutations it skips, which is why the split can be chosen freely: every
-    # permutation still comes from the same stream at the same position no matter how many
-    # pieces there are. n_workers and n_jobs therefore change only the speed, never the result.
-    # 
-    # Pieces are equal in evaluated count, which is also the minimum total fast-forward. The
-    # last piece skips the whole stream, but a draw is a fraction of a percent of an evaluated
-    # iteration, and that skip runs while the other workers are doing real work.
-    pieces = [pc for pc in np.array_split(np.arange(snpPerms), n_workers) if pc.size]
-    job_args = [perm_args(int(pc[0]), int(pc.size)) for pc in pieces]
+
+    # Permutations are addressed by index, so the split across workers is arbitrary: piece
+    # boundaries change nothing about which permutation is drawn at position k. n_workers and
+    # n_jobs therefore change only the speed, never the result.
+    pieces = [pc for pc in np.array_split(np.arange(snp_perms), n_workers) if pc.size]
+    job_args = [perm_args(int(pc[0]), int(pc[-1]) + 1) for pc in pieces]
 
     pool = ctx.Pool(processes=n_workers, initializer=init_worker)
     try:
@@ -823,9 +907,9 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
 
     print(f"- {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
-    bpm_local_pv[ind2keep_bpm] = (count_bpm + 1) / snpPerms
-    wpm_local_pv[ind2keep_wpm] = (count_wpm + 1) / snpPerms
-    path_degree_pv[ind2keep_path] = (count_path + 1) / snpPerms
+    bpm_local_pv[ind2keep_bpm] = (count_bpm + 1) / snp_perms
+    wpm_local_pv[ind2keep_wpm] = (count_wpm + 1) / snp_perms
+    path_degree_pv[ind2keep_path] = (count_path + 1) / snp_perms
 
     stats_obj = Stats(
         bpm_local=bpm_local,
@@ -840,11 +924,11 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snpPerms, n_jobs, n_worker
         path_degree=path_degree,
         path_degree_pv=path_degree_pv
     )
-    
+
     return stats_obj
 
 def genstats(project_dir, ssmfile, binary_flag, net_density, snp_perms, n_jobs, n_workers, seed):
-    
+
     # load pathway indices
     with open(f"{project_dir}/intermediate/pathway_indices.pkl", 'rb') as f:
         pathway_indices: bpmindclass = pickle.load(f)
@@ -857,13 +941,13 @@ def genstats(project_dir, ssmfile, binary_flag, net_density, snp_perms, n_jobs, 
         network: InteractionNetwork = pickle.load(f)
     p_network: csr_array = as_sparse(network.protective)
     r_network: csr_array = as_sparse(network.risk)
-    
+
     print(f"\tloaded protective and risk networks with {p_network.shape[0]:,} SNPs", flush=True)
     print(f"\t{p_network.shape[0] * p_network.shape[1]:,} entries in the SNP-SNP interaction network", flush=True)
-    
+
     p_density = p_network.nnz / (p_network.shape[0] * p_network.shape[1]) * 100
     print(f"\t{p_density:.2f}% of the entries are nonzero in protective network", flush=True)
-    
+
     r_density = r_network.nnz / (r_network.shape[0] * r_network.shape[1]) * 100
     print(f"\t{r_density:.2f}% of the entries are nonzero in risk network", flush=True)
 
@@ -875,24 +959,26 @@ def genstats(project_dir, ssmfile, binary_flag, net_density, snp_perms, n_jobs, 
         else:
             p_cutoff = sparse_quantile(p_network, 1 - net_density)
             r_cutoff = sparse_quantile(r_network, 1 - net_density)
-            # a cutoff of anything less than 0 would binarize the zeros too, i.e. densify to an all-ones s x s matrix. 
-            # That is unrepresentable sparsely (and almost certainly not intended), so fall back to keeping the stored entries and say so.
+            # A cutoff of 0 or less would binarize the zeros too, i.e. densify to an all-ones
+            # s x s matrix. That is unrepresentable sparsely (and almost certainly not
+            # intended), so fall back to keeping the stored entries and say so.
+            tiny = np.finfo(np.float64).tiny
             for name, cutoff in (('protective', p_cutoff), ('risk', r_cutoff)):
                 if cutoff <= 0:
                     print(f"\twarning: net_density={net_density} puts the {name} cutoff at "
                           f"{cutoff}; keeping all nonzero entries instead of densifying", flush=True)
-            p_network = binarize(p_network, 0)
-            r_network = binarize(r_network, 0)
-            
+            p_network = binarize(p_network, max(p_cutoff, tiny))
+            r_network = binarize(r_network, max(r_cutoff, tiny))
+
     print(f"running genstats on protective network", flush=True)
     protective_stats = rungenstats(p_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed)
 
     print(f"running genstats on risk network", flush=True)
     risk_stats = rungenstats(r_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed)
-    
+
     print(flush=True)
     out_obj = GenstatsOut(protective_stats, risk_stats)
-    
+
     output_file = f"{project_dir}/intermediate/genstats_{ssmfile.split('/')[-1]}"
     with open(output_file, 'wb') as f:
         pickle.dump(out_obj, f)
