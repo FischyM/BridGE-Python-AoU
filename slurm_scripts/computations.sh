@@ -12,7 +12,9 @@ mem=$4                  # requested RAM in GB
 node=$5                 # what node to run on: ex. ag2tb, agsmall
 
 proj_dir=$6             # project directory that must be a subdirectory of the BridGE-Python-AoU directory
-R=$7                    # number of random networks (real is 0)
+R=$7                    # number of random networks (real is 0) which is the same as number of jobs to run in the array
+njobs=$8                # number of jobs to split the data into. Recommended to be 4 or 8 as there isn't much increase to time when using larger job splits for a greatly reduced RAM usage.
+perms=$9                # number of SNP permutations
 
 # move to slurm script directory
 cd "/projects/standard/myersc/fisch872/BridGE-Python-AoU/$proj_dir/slurm" || exit
@@ -20,7 +22,7 @@ echo
 
 
 # create a file for the slurm script
-file="4-fdr.txt"
+file="1-computations.txt"
 if [ -f "$file" ]; then
     rm -f "$file"
 fi
@@ -45,11 +47,11 @@ echo "source ~/.bashrc"
 echo "source activate bridge-aou"
 echo "cd /projects/standard/myersc/fisch872/BridGE-Python-AoU"
 echo "source setup.sh"
-echo "time python bridge.py --projectDir=$proj_dir --module=ComputeFDR --model=combined --pvalueCutoff=0.05 --R=$R"
-echo "time python bridge.py --projectDir=$proj_dir --module=Summarize --model=combined --fdrCutoff=0.25"
+echo "time python bridge.py --projectDir=$proj_dir --module=ComputeInteraction --model=combined --nWorker=$tasks --nJobs=$njobs --seed=42 --i=\$SLURM_ARRAY_TASK_ID"
+echo "time python bridge.py --projectDir=$proj_dir --module=ComputeStats --model=combined --nWorker=$tasks --nJobs=$njobs --snpPerms=$perms --seed=42 --i=\$SLURM_ARRAY_TASK_ID"
 echo 
 } >> "${file}"
 
 
 # run the slurm script
-sbatch -p "$node" "$file"
+sbatch --array=0-"${R}" -p "$node" "$file"

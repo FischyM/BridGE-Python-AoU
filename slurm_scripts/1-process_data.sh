@@ -13,7 +13,9 @@ node=$5                 # what node to run on: ex. ag2tb, agsmall
 
 proj_dir=$6             # project directory that must be a subdirectory of the BridGE-Python-AoU directory
 plink_name=$7           # name of the plink file to preprocess and must be in the raw subdirectory of $proj_dir
-
+simMeasure=$8           # 'jaccard', 'overlap', or 'either'
+jaccardCutoff=$9        # jaccard cutoff value for filtering gene sets
+overlapCutoff=${10}     # overlap cutoff value for filtering gene sets
 
 # move to slurm script directory
 cd "/projects/standard/myersc/fisch872/BridGE-Python-AoU/$proj_dir/slurm" || exit
@@ -46,7 +48,7 @@ echo "source ~/.bashrc"
 echo "source activate bridge-aou"
 echo "cd /projects/standard/myersc/fisch872/BridGE-Python-AoU"
 echo "source setup.sh"
-echo "time python bridge.py --projectDir=$proj_dir --module=DataProcess --plinkFile=$plink_name --geneAnnotation=glist-hg38 --geneSets=c2.cp.v2026.1.Hs --simMeasure=either --jaccardCutoff=0.33 --overlapCutoff=0.5"
+echo "time python bridge.py --projectDir=$proj_dir --module=DataProcess --plinkFile=$plink_name --geneAnnotation=glist-hg38 --geneSets=c2.cp.v2026.1.Hs --simMeasure=$simMeasure --jaccardCutoff=$jaccardCutoff --overlapCutoff=$overlapCutoff"
 echo 
 } >> "${file}"
 
