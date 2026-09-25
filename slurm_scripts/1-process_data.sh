@@ -18,7 +18,7 @@ jaccardCutoff=$9        # jaccard cutoff value for filtering gene sets
 overlapCutoff=${10}     # overlap cutoff value for filtering gene sets
 
 # move to slurm script directory
-cd "/projects/standard/myersc/fisch872/BridGE-Python-AoU/$proj_dir/slurm" || exit
+cd "/projects/standard/myersc/fisch872/bridge-projects/BridGE-Python-AoU/$proj_dir/slurm" || exit
 echo
 
 
@@ -46,7 +46,7 @@ echo "#SBATCH -A myersc"
 echo
 echo "source ~/.bashrc"
 echo "source activate bridge-aou"
-echo "cd /projects/standard/myersc/fisch872/BridGE-Python-AoU"
+echo "cd /projects/standard/myersc/fisch872/bridge-projects/BridGE-Python-AoU"
 echo "source setup.sh"
 echo "time python bridge.py --projectDir=$proj_dir --module=DataProcess --plinkFile=$plink_name --geneAnnotation=glist-hg38 --geneSets=c2.cp.v2026.1.Hs --simMeasure=$simMeasure --jaccardCutoff=$jaccardCutoff --overlapCutoff=$overlapCutoff"
 echo 

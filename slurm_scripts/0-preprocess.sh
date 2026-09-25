@@ -22,7 +22,7 @@ y2=${13}                # y2 coordinate for outlier removal
 
 
 # move to slurm script directory
-cd "/projects/standard/myersc/fisch872/BridGE-Python-AoU/$proj_dir/slurm" || exit
+cd "/projects/standard/myersc/fisch872/bridge-projects/BridGE-Python-AoU/$proj_dir/slurm" || exit
 echo
 
 
@@ -50,7 +50,7 @@ echo "#SBATCH -A myersc"
 echo
 echo "source ~/.bashrc"
 echo "source activate bridge-aou"
-echo "cd /projects/standard/myersc/fisch872/BridGE-Python-AoU"
+echo "cd /projects/standard/myersc/fisch872/bridge-projects/BridGE-Python-AoU"
 echo "source setup.sh"
 echo "time ./scripts/check_population.sh $proj_dir/raw/$plink_name $proj_dir/raw/$prj1000File $proj_dir/raw/$popIDFile $proj_dir/preprocess/$plink_name.prj1000"
 echo "time ./scripts/remove_outlier.sh $proj_dir/raw/$plink_name $proj_dir/preprocess/$plink_name.prj1000.eigenvec $proj_dir/preprocess/$plink_name.rmoutlier $x1 $x2 $y1 $y2"

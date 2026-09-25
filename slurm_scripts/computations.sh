@@ -17,7 +17,7 @@ njobs=$8                # number of jobs to split the data into. Recommended to 
 perms=$9                # number of SNP permutations
 
 # move to slurm script directory
-cd "/projects/standard/myersc/fisch872/BridGE-Python-AoU/$proj_dir/slurm" || exit
+cd "/projects/standard/myersc/fisch872/bridge-projects/BridGE-Python-AoU/$proj_dir/slurm" || exit
 echo
 
 
@@ -45,7 +45,7 @@ echo "#SBATCH -A myersc"
 echo
 echo "source ~/.bashrc"
 echo "source activate bridge-aou"
-echo "cd /projects/standard/myersc/fisch872/BridGE-Python-AoU"
+echo "cd /projects/standard/myersc/fisch872/bridge-projects/BridGE-Python-AoU"
 echo "source setup.sh"
 echo "time python bridge.py --projectDir=$proj_dir --module=ComputeInteraction --model=combined --nWorker=$tasks --nJobs=$njobs --seed=42 --i=\$SLURM_ARRAY_TASK_ID"
 echo "time python bridge.py --projectDir=$proj_dir --module=ComputeStats --model=combined --nWorker=$tasks --nJobs=$njobs --snpPerms=$perms --seed=42 --i=\$SLURM_ARRAY_TASK_ID"
