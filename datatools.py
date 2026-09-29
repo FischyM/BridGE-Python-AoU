@@ -124,9 +124,12 @@ def msigdb2pkl(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap_c
     elif sim_measure == "overlap":
         print(f"    rule: drop a pathway if overlap >= {overlap_cutoff} vs. any already-kept pathway")
         tmp_str = f" using overlap >= {overlap_cutoff}"
-    else:
+    elif sim_measure == "either":
         print(f"    rule: drop a pathway if jaccard >= {jaccard_cutoff} OR overlap >= {overlap_cutoff} vs. any already-kept pathway")
         tmp_str = f" using jaccard >= {jaccard_cutoff} OR overlap >= {overlap_cutoff}"
+    else:
+        print(f"    rule: no similarity measure applied")
+        tmp_str = ""
         
     # load pathway files
     symbols_df = pd.read_csv(symbols_file, header=None)
@@ -150,25 +153,30 @@ def msigdb2pkl(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap_c
     candidates = [row.Index for row in symbols_df.itertuples() if min_size <= len(row.gene_names) <= max_size]
     print(f"    size filter [{min_size}, {max_size}]: {len(candidates)} / {len(symbols_df)} pathways")
 
-    # greedy redundancy filter, smallest pathway first.
-    ordered = sorted(candidates, key=lambda i: len(symbols_df.loc[i, 'gene_names']))
-    keep_pathway_inds = []  # indices into the original (unsorted) arrays, in size-ascending order
-    keep_gene_sets = []
-    for i in ordered:
-        query_gene_set = set(symbols_df.loc[i, 'gene_names'])
-        keep = True
-        for gene_set in keep_gene_sets:
-            if too_similar(gene_set, query_gene_set, sim_measure, jaccard_cutoff, overlap_cutoff):
-                keep = False
-                break
-        if keep:
-            keep_pathway_inds.append(i)
-            keep_gene_sets.append(query_gene_set)
-    print(f"    kept {len(keep_pathway_inds)} / {len(candidates)} size-filtered pathways{tmp_str}")
-    
-    # filter the original dataframes to only include the kept pathways
-    symbols_df = symbols_df.loc[keep_pathway_inds].reset_index(drop=True)
-    entrez_df = entrez_df.loc[keep_pathway_inds].reset_index(drop=True)
+    if sim_measure in ('jaccard', 'overlap', 'either'):
+        # greedy redundancy filter, smallest pathway first.
+        ordered = sorted(candidates, key=lambda i: len(symbols_df.loc[i, 'gene_names']))
+        keep_pathway_inds = []  # indices into the original (unsorted) arrays, in size-ascending order
+        keep_gene_sets = []
+        for i in ordered:
+            query_gene_set = set(symbols_df.loc[i, 'gene_names'])
+            keep = True
+            for gene_set in keep_gene_sets:
+                if too_similar(gene_set, query_gene_set, sim_measure, jaccard_cutoff, overlap_cutoff):
+                    keep = False
+                    break
+            if keep:
+                keep_pathway_inds.append(i)
+                keep_gene_sets.append(query_gene_set)
+        print(f"    kept {len(keep_pathway_inds)} / {len(candidates)} size-filtered pathways{tmp_str}")
+        
+        # filter the original dataframes to only include the kept pathways
+        symbols_df = symbols_df.loc[keep_pathway_inds].reset_index(drop=True)
+        entrez_df = entrez_df.loc[keep_pathway_inds].reset_index(drop=True)
+        
+    else:
+        print(f"    kept {len(candidates)} / {len(candidates)} size-filtered pathways: no similarity measure applied")
+
     
     # make gene by pathway binary matrix
     pathway_list = symbols_df['pathway_names'].tolist()

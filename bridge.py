@@ -12,7 +12,7 @@ from corefuns import collectresults as cl
 
 MODULE_CHOICES = ('DataProcess', 'ComputeInteraction', 'ComputeStats', 'ComputeFDR', 'Summarize')
 VALID_MODELS = ('RR', 'RD', 'DD', 'combined')
-SIM_MEASURES = ('jaccard', 'overlap', 'either')
+SIM_MEASURES = ('jaccard', 'overlap', 'either', 'none')
 
 
 def parse_args():
