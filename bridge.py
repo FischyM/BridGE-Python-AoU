@@ -12,7 +12,7 @@ from corefuns import collectresults as cl
 
 MODULE_CHOICES = ('DataProcess', 'ComputeInteraction', 'ComputeStats', 'ComputeFDR', 'Summarize')
 VALID_MODELS = ('RR', 'RD', 'DD', 'combined')
-SIM_MEASURES = ('jaccard', 'overlap', 'either', 'none')
+# SIM_MEASURES = ('jaccard', 'overlap', 'either', 'none')
 
 
 def parse_args():
@@ -40,7 +40,8 @@ def parse_args():
     p.add_argument('--mappingDistance',  dest='mapping_distance', type=int, default=50000)
     p.add_argument('--minPath', dest='min_path_size', type=int, default=10)
     p.add_argument('--maxPath', dest='max_path_size', type=int, default=300)
-    p.add_argument('--simMeasure', dest='sim_measure', choices=SIM_MEASURES, default='jaccard')
+    # p.add_argument('--simMeasure', dest='sim_measure', choices=SIM_MEASURES, default='jaccard')
+    p.add_argument('--simMeasure', dest='sim_measure', default='jaccard')
     p.add_argument('--jaccardCutoff', dest='jaccard_cutoff', type=float, default=0.5)
     p.add_argument('--overlapCutoff', dest='overlap_cutoff', type=float, default=0.5)
     

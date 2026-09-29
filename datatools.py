@@ -128,7 +128,7 @@ def msigdb2pkl(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap_c
         print(f"    rule: drop a pathway if jaccard >= {jaccard_cutoff} OR overlap >= {overlap_cutoff} vs. any already-kept pathway")
         tmp_str = f" using jaccard >= {jaccard_cutoff} OR overlap >= {overlap_cutoff}"
     else:
-        print(f"    rule: no similarity measure applied")
+        print(f"    rule: no similarity measure applied (options: jaccard, overlap, either, or none)")
         tmp_str = ""
         
     # load pathway files
@@ -152,10 +152,10 @@ def msigdb2pkl(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap_c
     # size filter, applied before redundancy filtering (see module docstring).
     candidates = [row.Index for row in symbols_df.itertuples() if min_size <= len(row.gene_names) <= max_size]
     print(f"    size filter [{min_size}, {max_size}]: {len(candidates)} / {len(symbols_df)} pathways")
-
+    
+    # greedy redundancy filter, smallest pathway first
+    ordered = sorted(candidates, key=lambda i: len(symbols_df.loc[i, 'gene_names']))
     if sim_measure in ('jaccard', 'overlap', 'either'):
-        # greedy redundancy filter, smallest pathway first.
-        ordered = sorted(candidates, key=lambda i: len(symbols_df.loc[i, 'gene_names']))
         keep_pathway_inds = []  # indices into the original (unsorted) arrays, in size-ascending order
         keep_gene_sets = []
         for i in ordered:
@@ -175,7 +175,9 @@ def msigdb2pkl(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap_c
         entrez_df = entrez_df.loc[keep_pathway_inds].reset_index(drop=True)
         
     else:
-        print(f"    kept {len(candidates)} / {len(candidates)} size-filtered pathways: no similarity measure applied")
+        symbols_df = symbols_df.loc[ordered].reset_index(drop=True)
+        entrez_df = entrez_df.loc[ordered].reset_index(drop=True)
+        print(f"    kept {len(ordered)} / {len(candidates)} size-filtered pathways: no similarity measure applied")
 
     
     # make gene by pathway binary matrix
