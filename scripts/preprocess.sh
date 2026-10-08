@@ -20,8 +20,9 @@ set -o pipefail
 # Write LD-statistic matrix/table to disk (--r[2]-[un]phased)
 
 
-plinkFile=$1        # base name of the PLINK file (without extension)
-outputFile=$2       # base name of the output file (without extension)
+plink_file=$1       # base name of the PLINK file (without extension)
+output_file=$2      # base name of the output file (without extension)
+gene_list=$3        # path to the gene list file (in BED format) to filter SNPs by gene boundaries
 
 # basic QC
 mind=0.05           # maximum allowed fraction of missing genotypes per sample
@@ -40,62 +41,82 @@ npcs=10             # number of PCs to compute for PCA and to use in matching ca
 ratio=1             # number of controls to match to each case eg., <ratio>:1
 
 
+
+
 # basic QC
-plink2 --pfile "${plinkFile}" \
+plink2 --pfile "${plink_file}" \
     --autosome --snps-only just-acgt --exclude-palindromic-snps \
     --mind ${mind} --geno ${geno} --hwe ${hwe_p} ${hwe_k} midp keep-fewhet --maf ${maf} \
-    --sort-vars --make-pgen --out "${plinkFile}.step1.basicQC" --silent
+    --sort-vars --make-pgen --out "${plink_file}.step1.basicQC" --silent
 
 
 # get a less redundant set of SNPs using LD pruning
-plink2 --pfile "${plinkFile}.step1.basicQC" \
+plink2 --pfile "${plink_file}.step1.basicQC" \
     --indep-pairwise ${ld_window} ${ld_step} ${ld_r2} \
-    --out "${plinkFile}.step2.LD" --silent
+    --out "${plink_file}.step2.LD" --silent
 
-plink2 --pfile "${plinkFile}.step1.basicQC" \
-    --extract "${plinkFile}.step2.LD.prune.in" \
-    --make-pgen --out "${plinkFile}.step2.pruned" --silent
+plink2 --pfile "${plink_file}.step1.basicQC" \
+    --extract "${plink_file}.step2.LD.prune.in" \
+    --make-pgen --out "${plink_file}.step2.pruned" --silent
 
 
 # filtering out related samples
-plink2 --pfile "${plinkFile}.step2.pruned" \
+plink2 --pfile "${plink_file}.step2.pruned" \
     --make-king-table --king-table-filter ${king_filter} \
-    --out "${plinkFile}.step3.king" --silent
+    --out "${plink_file}.step3.king" --silent
 
 python -m remove_related_helper \
-    --kin0 "${plinkFile}.step3.king.kin0" \
-    --psam "${plinkFile}.step2.pruned.psam" \
-    --out "${plinkFile}.step3.unrelated.id" \
-    --removed "${plinkFile}.step3.related.id"
+    --kin0 "${plink_file}.step3.king.kin0" \
+    --psam "${plink_file}.step2.pruned.psam" \
+    --out "${plink_file}.step3.unrelated.id" \
+    --removed "${plink_file}.step3.related.id"
 
-plink2 --pfile "${plinkFile}.step2.pruned" \
-    --keep "${plinkFile}.step3.unrelated.id" \
-    --make-pgen --out "${plinkFile}.step3.unrelated" --silent
+plink2 --pfile "${plink_file}.step2.pruned" \
+    --keep "${plink_file}.step3.unrelated.id" \
+    --make-pgen --out "${plink_file}.step3.unrelated" --silent
 
 
 # match cases to controls
-plink2 --pfile "${plinkFile}.step3.unrelated" \
+plink2 --pfile "${plink_file}.step3.unrelated" \
     --pca ${npcs} \
-    --out "${plinkFile}.step4.pca" --silent
+    --out "${plink_file}.step4.pca" --silent
 
 python -m match_case_control_helper \
-    --eigenvec "${plinkFile}.step4.pca.eigenvec" \
-    --eigenval "${plinkFile}.step4.pca.eigenval" \
-    --psam "${plinkFile}.step3.unrelated.psam" \
+    --eigenvec "${plink_file}.step4.pca.eigenvec" \
+    --eigenval "${plink_file}.step4.pca.eigenval" \
+    --psam "${plink_file}.step3.unrelated.psam" \
     --weight-eigenvalues --npcs ${npcs} --ratio ${ratio} \
-    --out "${plinkFile}.step4.matched.id" \
-    --pairs "${plinkFile}.step4.matched.pairs.tsv"
+    --out "${plink_file}.step4.matched.id" \
+    --pairs "${plink_file}.step4.matched.pairs.tsv"
     
-plink2 --pfile "${plinkFile}.step3.unrelated" \
-    --keep "${plinkFile}.step4.matched.id" \
-    --make-pgen --out "${outputFile}" --silent
+plink2 --pfile "${plink_file}.step3.unrelated" \
+    --keep "${plink_file}.step4.matched.id" \
+    --make-pgen --out "${plink_file}.step4.matched" --silent
 
+
+
+# ---------------------------------------------------------------------------
+# required to run BridGE
+# ---------------------------------------------------------------------------
+
+# recalculate PCA on matched dataset to use in permutation testing
+plink2 --pfile "${plink_file}.step4.matched" \
+    --pca ${npcs} \
+    --out "${output_file}.pca" --silent
+
+# remove SNPs outside gene boundaries
+plink2 --pfile "${plink_file}.step4.matched" \
+    --extract bed1 "${gene_list}" \
+    --make-pgen --out "${output_file}" --silent
 
 # compute LD matrix for use in get_interaction_list
 for i in {1..22}; do
-    plink2 --pfile "${outputFile}" --r2-unphased square bin4 --chr "${i}" --out "${outputFile}.ld_${i}" --silent
+    plink2 --pfile "${output_file}" \
+    --r2-unphased square bin4 \
+    --chr "${i}" \
+    --out "${output_file}.ld_${i}" --silent
 done
 
-python -m stitch_ld --prefix "${outputFile}"
+python -m stitch_ld --prefix "${output_file}"
 
-rm "${outputFile}".ld_*
+rm "${output_file}".ld_*
