@@ -1,45 +1,24 @@
-import pickle
-
 import numpy as np
+import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib import rcParams
 from matplotlib.backends.backend_pdf import PdfPages
 
-from classes import bpmindclass
-
-# draw_map() draws a non-redundant network map of the significant BPMs/WPMs/PATHs.
-#
-# INPUTS:
-#   project_dir: project directory, used to locate BPMind.pkl and the results dir.
-#   fdrcut: FDR threshold the map is drawn at. Must be a multiple of 0.05.
-#   resultsfile: results pickle path. Only its filename is used, to name the PDF.
-#   BPM_group_tmp/WPM_group_tmp/PATH_group_tmp: lists returned by
-#       check_BPM_WPM_redundancy, one entry per 0.05 threshold. Each entry is a
-#       Series of redundant-group labels indexed by GLOBAL module index, so the
-#       last entry is the level at exactly fdrcut.
-#   bpm_limit: maximum number of BPM redundant groups to draw.
-#
-# OUTPUTS:
-#   <project_dir>/results/network-map-<ssmfile>.pdf
-
 
 # TODO: redo the refactoring of this file
 
-def draw_map(project_dir, fdrcut, ssmfile, BPM_group_tmp, WPM_group_tmp, PATH_group_tmp, bpm_limit=20):
+def draw_map(project_dir, fdrcut, output_file, BPM_group_tmp, WPM_group_tmp, PATH_group_tmp, bpm_limit=20):
     rcParams['font.family'] = 'sans-serif'
 
-    pathway_indices_file = f"{project_dir}/intermediate/pathway_indices.pkl"
-    with open(pathway_indices_file, 'rb') as f:
-        bpmind: bpmindclass = pickle.load(f)
+    bpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
+    wpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet")
 
     # Module indices here are row POSITIONS in bpm/wpm, not index labels:
     # bpm's index can have gaps (pathway pairs dropped upstream), so every
     # lookup below goes through .iloc. Same convention as _bpm_similar() in
     # check_BPM_WPM_redundancy.
-    bpm = bpmind.bpm
-    wpm = bpmind.wpm
     wpm_size = wpm.shape[0]
     bpm_size = bpm.shape[0]
 
@@ -66,9 +45,9 @@ def draw_map(project_dir, fdrcut, ssmfile, BPM_group_tmp, WPM_group_tmp, PATH_gr
         else:
             to_draw.append((p1, p1, 'protective'))
 
-    # add PATHs
-    #path_groups = PATH_group_tmp[-1]
-    #for g in np.unique(path_groups.to_numpy()):
+    # # add PATHs
+    # path_groups = PATH_group_tmp[-1]
+    # for g in np.unique(path_groups.to_numpy()):
     #	members = path_groups.index[path_groups == g]
     #	xid = members[0]
     #	risk_type = xid >= wpm_size
@@ -143,6 +122,7 @@ def draw_map(project_dir, fdrcut, ssmfile, BPM_group_tmp, WPM_group_tmp, PATH_gr
         inds[p] = i
         nodes_labels[i] = p
         simple_labels[i] = i
+        
     # now create the matrix
     adj_matrix = np.zeros((len(used_pathways), len(used_pathways)))
     path_array = []
@@ -176,6 +156,7 @@ def draw_map(project_dir, fdrcut, ssmfile, BPM_group_tmp, WPM_group_tmp, PATH_gr
     # Graph(map)
     G = nx.DiGraph()
     added_node_flag = np.zeros((len(used_pathways), ))
+    
     # add PATHs with color
     for t in path_array:
         p = t[0]
@@ -194,6 +175,7 @@ def draw_map(project_dir, fdrcut, ssmfile, BPM_group_tmp, WPM_group_tmp, PATH_gr
         if added_node_flag[i] == 0:
             p = used_pathways[i]
             G.add_nodes_from([(inds[p], {"color": "lightblue"})])
+            
     # add BPMs by adding edges
     for i in range(len(used_pathways)):
         for j in range(i, len(used_pathways)):
@@ -208,6 +190,7 @@ def draw_map(project_dir, fdrcut, ssmfile, BPM_group_tmp, WPM_group_tmp, PATH_gr
                 p2 = used_pathways[j]
                 G.add_edge(inds[p1], inds[p2], color='blue')
                 G.add_edge(inds[p2], inds[p1], color='blue')
+                
     # drawing 
     fig_title = 'Non-redundant network map with FDR threshold=' + str(int(fdr_th*100))
     nodes = G.nodes
@@ -240,10 +223,12 @@ def draw_map(project_dir, fdrcut, ssmfile, BPM_group_tmp, WPM_group_tmp, PATH_gr
     for i in range(len(used_pathways)):
         txt = txt + f"{i}: {nodes_labels[i]}\n"
     plt.axis('off')
-    plt.text(0.05, 0.05, txt, transform=fig2.transFigure, size=12)
+    fig2.text(0.05, 0.05, txt, size=12)
     
     # find output file name based on the ssmfile name
-    pp = PdfPages(f"{project_dir}/results/network-map-{ssmfile.split('/')[-1].split('.pkl')[0]}.pdf")
+    net_map_name = f"network_map-{'-'.join(output_file.stem.split('-')[-2:])}.pdf"
+    net_map_file = output_file.with_name(net_map_name)
+    pp = PdfPages(net_map_file)
     fig_nums = plt.get_fignums()
     figs = [plt.figure(n) for n in fig_nums]
     for fig in figs:

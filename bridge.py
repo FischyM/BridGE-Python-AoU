@@ -2,18 +2,16 @@ import argparse, psutil, signal, sys, threading, time
 import multiprocessing as mp
 from os import path
 
-import datatools
-from corefuns import matrix_operations_par as ci
-from corefuns import genstats_perm as gs
-from corefuns import fdrsampleperm as fdr
-from corefuns import collectresults as cl
-
+from src import datatools as dt
+from src import compute_interactions as ci
+from src import compute_stats as cs
+from src import compute_fdr as fdr
+from src import collect_results as cr
 
 
 MODULE_CHOICES = ('DataProcess', 'ComputeInteraction', 'ComputeStats', 'ComputeFDR', 'Summarize')
 VALID_MODELS = ('RR', 'RD', 'DD', 'combined')
 # SIM_MEASURES = ('jaccard', 'overlap', 'either', 'none')
-
 
 def parse_args():
     p = argparse.ArgumentParser(description='BridGE pipeline', allow_abbrev=False)
@@ -32,15 +30,14 @@ def parse_args():
     p.add_argument('--seed', dest='seed', type=int, default=42)
     p.add_argument('--ssmFile', dest='ssm_file', default=None)
     p.add_argument('--noMem', dest='no_mem', action='store_true')
+    p.add_argument('--compressed', dest='compressed', action='store_true')
     
     # data processing arguments
     p.add_argument('--plinkFile', dest='plinkfile', default='')
     p.add_argument('--geneSets', dest='gene_sets', default='')
     p.add_argument('--geneAnnotation', dest='gene_annotation', default='')
-    p.add_argument('--mappingDistance',  dest='mapping_distance', type=int, default=50000)
     p.add_argument('--minPath', dest='min_path_size', type=int, default=10)
     p.add_argument('--maxPath', dest='max_path_size', type=int, default=300)
-    # p.add_argument('--simMeasure', dest='sim_measure', choices=SIM_MEASURES, default='jaccard')
     p.add_argument('--simMeasure', dest='sim_measure', default='jaccard')
     p.add_argument('--jaccardCutoff', dest='jaccard_cutoff', type=float, default=0.5)
     p.add_argument('--overlapCutoff', dest='overlap_cutoff', type=float, default=0.5)
@@ -71,41 +68,35 @@ def require_exists(*filepaths):
 def run_data_process(args):
     print('Data Processing')
 
-    # load in plink files and convert to pkl format. Additionally converts missing genotypes to 0
-    print('converting plink files to pkl format...')
+    print('converting PLINK files...')
     pgen_file = f"{args.project_dir}/raw/{args.plinkfile}.pgen"
     pvar_file = f"{args.project_dir}/raw/{args.plinkfile}.pvar"
     psam_file = f"{args.project_dir}/raw/{args.plinkfile}.psam"
     require_exists(pgen_file, pvar_file, psam_file)
-    snp_data_pkl = f"{args.project_dir}/intermediate/snp_data.pkl"
-    datatools.plink2pkl(pgen_file, pvar_file, psam_file, snp_data_pkl)
+    snp_data_file = f"{args.project_dir}/intermediate/snp_data.npz"
+    dt.convert_plink(pgen_file, pvar_file, psam_file, snp_data_file, compressed=args.compressed)
 
-    # create a gene to pathway mapping from MSigDB gene set file.
     print('filtering and creating gene to pathway (gene set) mapping...')
     symbols_file = f"{args.project_dir}/raw/{args.gene_sets}.symbols.gmt"
     entrez_file = f"{args.project_dir}/raw/{args.gene_sets}.entrez.gmt"
     require_exists(symbols_file, entrez_file)
-    gene_pathway_pkl = f"{args.project_dir}/intermediate/gene_pathway_mapping.pkl"
-    datatools.msigdb2pkl(symbols_file, entrez_file, args.sim_measure, args.jaccard_cutoff,
-                         args.overlap_cutoff, args.min_path_size, args.max_path_size, gene_pathway_pkl)
+    gene_pathway_file = f"{args.project_dir}/intermediate/gene_pathway_mapping.parquet"
+    dt.gene2pathway(symbols_file, entrez_file, args.sim_measure, args.jaccard_cutoff, args.overlap_cutoff,
+                  args.min_path_size, args.max_path_size, gene_pathway_file)
 
-    # create a mapping of SNPs to genes with a mapping_distance extension to the start and end of each gene
     print('creating SNP to gene mapping...')
-    # using a gene annotation file downloaded from Plink.
     gene_annotation_file = f"{args.project_dir}/raw/{args.gene_annotation}"
     require_exists(gene_annotation_file)
-    snp_gene_pkl = f"{args.project_dir}/intermediate/snp_gene_mapping.pkl"
-    datatools.mapsnp2gene(pvar_file, gene_annotation_file, args.mapping_distance, snp_gene_pkl)
+    snp_gene_file = f"{args.project_dir}/intermediate/snp_gene_mapping.parquet"
+    dt.snp2gene(pvar_file, gene_annotation_file, snp_gene_file)
 
-    # create a mapping of SNPs to pathways using the snp_date.pkl, snp_gene_mapping.pkl and gene_pathway_mapping.pkl files.
     print('creating SNP to pathway mapping...')
-    snp_pathway_pkl = f"{args.project_dir}/intermediate/snp_pathway_mapping.pkl"
-    datatools.snppathway(args.project_dir, args.min_path_size, args.max_path_size, snp_pathway_pkl)
+    snp_pathway_file = f"{args.project_dir}/intermediate/snp_pathway_mapping.parquet"
+    dt.snp2pathway(args.project_dir, snp_pathway_file)
     
-    # create a mapping of SNP indices for BPM/WPM sets using the snp_pathway_mapping.pkl file.
     print('creating SNP indices for BPM/WPM sets...')
-    pathway_inds_pkl = f"{args.project_dir}/intermediate/pathway_indices.pkl"
-    datatools.bpmind(args.project_dir, args.min_path_size, pathway_inds_pkl)
+    pathway_inds_file = f"{args.project_dir}/intermediate/pathway_indices"
+    dt.pathway_indices(args.project_dir, args.min_path_size, args.n_workers, pathway_inds_file)
 
 
 def run_compute_interaction(args):
@@ -140,9 +131,11 @@ def run_compute_interaction(args):
         indices = range(args.r + 1) if args.r >= 0 else [args.i]
         for i in indices:
             if args.model == 'combined':
-                ci.combine(args.project_dir, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
+                ci.combined_models(args.project_dir, args.alpha1, args.alpha2, args.n_jobs,
+                                   args.n_workers, pool, i, args.seed, compressed=args.compressed)
             else:
-                ci.run(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs, args.n_workers, pool, i, args.seed)
+                ci.single_model(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs,
+                                args.n_workers, pool, i, args.seed, compressed=args.compressed)
         pool.close()
         pool.join()
         
@@ -159,7 +152,7 @@ def run_compute_interaction(args):
         
         
 def run_compute_stats(args):
-
+    
     # setup memory tracking
     def get_used_mem():
         return psutil.virtual_memory().total - psutil.virtual_memory().available
@@ -178,18 +171,18 @@ def run_compute_stats(args):
     monitor_thread.start()
         
     if args.ssm_file is not None:
-        ssm_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
+        snp_int_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
         print(f'Computing statistics on {args.ssm_file}')
-        gs.genstats(args.project_dir, ssm_file, args.binary_network, args.density_cutoff, 
-                    args.snp_perms, args.n_jobs, args.n_workers, args.seed)
+        cs.pathway_stats(args.project_dir, snp_int_file, args.binary_network, args.density_cutoff, 
+                    args.snp_perms, args.n_jobs, args.n_workers, args.seed, compressed=args.compressed)
 
     else:
         indices = range(args.r + 1) if args.r >= 0 else [args.i]
         for i in indices:
-            ssm_file = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R{i}.pkl"
+            snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R{i}.npz"
             print(f'Computing statistics on {args.model}_R{i}')
-            gs.genstats(args.project_dir, ssm_file, args.binary_network, args.density_cutoff,
-                        args.snp_perms, args.n_jobs, args.n_workers, args.seed)
+            cs.pathway_stats(args.project_dir, snp_int_file, args.binary_network, args.density_cutoff,
+                        args.snp_perms, args.n_jobs, args.n_workers, args.seed, compressed=args.compressed)
             
     stop_event.set()
     monitor_thread.join()
@@ -200,24 +193,24 @@ def run_compute_stats(args):
         
 def run_compute_fdr(args):
     if args.ssm_file is None:
-        ssm_file = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R0.pkl"
+        snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R0.npz"
     else:
-        ssm_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
+        snp_int_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
 
     print(f'Computing FDR')
-    fdr.fdrsampleperm(args.project_dir, ssm_file, args.pval_cutoff, args.r)
+    fdr.calculate_fdr(snp_int_file, args.pval_cutoff, args.r, compressed=args.compressed)
 
 
 def run_summarize(args):
     if args.ssm_file is None:
         imported = False
-        ssm_file = f"{args.project_dir}/intermediate/ssM_mhygessi_{args.model}_R0.pkl"
+        snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R0.npz"
     else:
         imported = True
-        ssm_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
+        snp_int_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
     
     print(f'Summarizing results')
-    cl.collectresults(args.project_dir, ssm_file, args.model, args.fdr_cutoff, imported, args.density_cutoff)
+    cr.collectresults(args.project_dir, snp_int_file, args.model, args.fdr_cutoff, imported, args.density_cutoff)
 
 
 MODULES_RUN = {

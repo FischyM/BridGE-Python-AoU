@@ -1,10 +1,10 @@
 import math
-import pickle
 
 import numpy as np
 import pandas as pd
 
-from corefuns import bpmsim, pathsim
+import src.bpmsim
+import src.pathsim
 
 FDR_STEP = 0.05
 SIM_CUTOFF = 0.25
@@ -39,22 +39,22 @@ def _greedy_groups(fdrs, similar):
                 break
     return pd.Series(labels, index=fdrs.index[rank])
 
-def _bpm_similar(bpmind, local_ind):
+def _bpm_similar(bpm, local_ind):
     # local_ind holds row POSITIONS in bpmind.bpm, not index labels: the FDR
     # frames are laid out in the row order of bpmind.bpm, whose index can have
     # gaps (pathway pairs dropped upstream). Label lookup would KeyError.
-    ind1 = bpmind.bpm['ind1'].iloc[local_ind]
-    ind2 = bpmind.bpm['ind2'].iloc[local_ind]
+    ind1 = bpm['ind1'].iloc[local_ind]
+    ind2 = bpm['ind2'].iloc[local_ind]
     return bpmsim.bpmsim(ind1, ind2, ind1, ind2) >= SIM_CUTOFF
 
-def _wpm_similar(bpmind, local_ind):
-    ind = bpmind.wpm['ind'].iloc[local_ind]
+def _wpm_similar(wpm, local_ind):
+    ind = wpm['ind'].iloc[local_ind]
     return bpmsim.bpmsim(ind, ind, ind, ind) >= SIM_CUTOFF
 
-def _path_similar(bpmind, local_ind):
-    return pathsim.pathsim(bpmind.wpm['ind'].iloc[local_ind]) >= SIM_CUTOFF
+def _path_similar(wpm, local_ind):
+    return pathsim.pathsim(wpm['ind'].iloc[local_ind]) >= SIM_CUTOFF
 
-def _groups_at_threshold(fdr_frame, fdr_col, n_modules, fdrcut, bpmind, similar_fn):
+def _groups_at_threshold(fdr_frame, fdr_col, n_modules, fdrcut, pathway_ind_df, similar_fn):
     """Redundancy groups for one module type at one FDR threshold.
 
     Protective modules occupy global indices 0..n_modules-1 and risk modules
@@ -77,7 +77,7 @@ def _groups_at_threshold(fdr_frame, fdr_col, n_modules, fdrcut, bpmind, similar_
             labels = pd.Series([0], index=global_ind, dtype=np.int64)
         else:
             fdrs = fdr_frame.loc[global_ind][fdr_col]
-            labels = _greedy_groups(fdrs, similar_fn(bpmind, local_ind))
+            labels = _greedy_groups(fdrs, similar_fn(pathway_ind_df, local_ind))
         parts.append(labels + n_groups)
         n_groups += labels.nunique()
 
@@ -85,7 +85,7 @@ def _groups_at_threshold(fdr_frame, fdr_col, n_modules, fdrcut, bpmind, similar_
         return pd.Series(dtype=np.int64), 0
     return pd.concat(parts), n_groups
 
-def check_BPM_WPM_redundancy(fdrBPM, fdrWPM, fdrPATH, bpmindfile, FDRcut):
+def check_BPM_WPM_redundancy(project_dir, fdrBPM, fdrWPM, fdrPATH, FDRcut):
     """Groups redundant BPMs/WPMs/PATHs at every 0.05 FDR threshold up to FDRcut.
 
     Args:
@@ -107,11 +107,10 @@ def check_BPM_WPM_redundancy(fdrBPM, fdrWPM, fdrPATH, bpmindfile, FDRcut):
               the ordering is protective-then-risk, which is not the same as
               global FDR rank.
     """
-    with open(bpmindfile, 'rb') as fh:
-        bpmind = pickle.load(fh)
-
-    n_bpm = len(bpmind.bpm['size'])
-    n_wpm = len(bpmind.wpm['size'])
+    bpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
+    wpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet")
+    n_bpm = len(bpm['size'])
+    n_wpm = len(wpm['size'])
 
     BPM_group, BPM_nosig_noRD = [], []
     WPM_group, WPM_nosig_noRD = [], []
@@ -120,15 +119,15 @@ def check_BPM_WPM_redundancy(fdrBPM, fdrWPM, fdrPATH, bpmindfile, FDRcut):
     for level in range(1, math.ceil(FDRcut / FDR_STEP) + 1):
         fdrcut = level * FDR_STEP
 
-        labels, n_groups = _groups_at_threshold(fdrBPM, 'bpm2', n_bpm, fdrcut, bpmind, _bpm_similar)
+        labels, n_groups = _groups_at_threshold(fdrBPM, 'bpm2', n_bpm, fdrcut, bpm, _bpm_similar)
         BPM_group.append(labels)
         BPM_nosig_noRD.append(n_groups)
 
-        labels, n_groups = _groups_at_threshold(fdrWPM, 'wpm2', n_wpm, fdrcut, bpmind, _wpm_similar)
+        labels, n_groups = _groups_at_threshold(fdrWPM, 'wpm2', n_wpm, fdrcut, wpm, _wpm_similar)
         WPM_group.append(labels)
         WPM_nosig_noRD.append(n_groups)
 
-        labels, n_groups = _groups_at_threshold(fdrPATH, 'path2', n_wpm, fdrcut, bpmind, _path_similar)
+        labels, n_groups = _groups_at_threshold(fdrPATH, 'path2', n_wpm, fdrcut, wpm, _path_similar)
         PATH_group.append(labels)
         PATH_nosig_noRD.append(n_groups)
 

@@ -115,6 +115,6 @@ elif gittype == 'wz':
 # save to file
 ssm_risk = np.maximum(ssm_risk, ssm_risk.T)
 ssm_pro = np.maximum(ssm_pro, ssm_pro.T)
-network = InteractionNetwork.InteractionNetwork(ssm_risk, ssm_pro, None, None)
+network = InteractionNetwork(ssm_risk, ssm_pro, None, None)
 with open(outputfile, 'wb') as final:
 	pickle.dump(network, final)

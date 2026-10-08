@@ -1,49 +1,29 @@
-import math, pickle
+import math
 from datetime import datetime
 from os import path
 
 import numpy as np
-from scipy.sparse import coo_array
+from scipy.sparse import coo_array, csr_array
 
-from corefuns import HygeCache as hc
-from corefuns import withinclassrand as wrand
-from classes import SNPclass, snpsetclass, InteractionNetwork
+from src import HygeCache as hc
+from src import withinclassrand as wrand
 
 
-# matrix_operations_par computes the interaction network. The functions to call are run() and combine()
-#
-# REFACTOR NOTES (see accompanying summary):
-#   - Workers no longer write into a giant shared dense (s x s) ctypes array. Each worker
-#     returns sparse (row, col, value) triples for its block, which the parent assembles
-#     into a scipy.sparse.csr_matrix. Most SNP pairs fail the alpha1/alpha2 filters, so this
-#     is a large memory win at any meaningful value of s.
-#   - sy is processed in column tiles (sy_chunk_size) inside each worker so peak memory per
-#     worker no longer scales with the full s, only with (chunk_rows x sy_chunk_size).
-#   - g10/g01/g00/x10/x01/x00 are derived from row/column sums of g11/x11 instead of being
-#     computed via separate matmuls, and xp11/xp10/xp01/xp00 = g - x (since pheno_res = 1-pheno
-#     is linear). This drops matmuls per chunk from 12 to 2 and removes 8 dense intermediates
-#     (Ix, Iy, sx_res, sy_res, tempx_r, temp_r, temp, and the redundant g/x recomputation).
-#   - InteractionNetwork now stores scipy.sparse.csr_matrix for risk/protective instead of
-#     dense numpy arrays. Downstream consumers (genstats_perm.py, fdrsampleperm.py,
-#     collectresults.py) will need to be updated to accept sparse matrices, consistent with
-#     the broader sparse-matrix migration already underway in DataProcess.
-#
-# INPUTS:
-#	project_dir: Project directory including all data files
-#	model: disease model, can be RR-DD-RD, for combining them, call combine() function instead of run()
-#	alpha1: maximum p-value threshold for p11 in combinations
-#	alpha2: minimum p-value threshold for p10, p01, p00 in combinations
-#	n_workers: Number of CPU cores used for parallel computing
-#	R: network number identifier, 0 for real, non-zero for random networks(phenotype labels will be randomly shuffled before computing interactions)
-#
-# OUTPUTS:
-#   ssM_mhygessi_{model}_R{R}.pkl - This pickle file contains an InteractionNetwork class object with following fields:
-#       - risk: Risk-associated SNP-SNP interaction scores, scipy.sparse.csr_matrix
-#       - protective: Protective SNP-SNP interaction scores, scipy.sparse.csr_matrix
-#		- risk_max_id: indicator of which disease model has the maximum risk score for each SNP pair, used in combined model
-#		- protective_max_id:  indicator of which disease model has the maximum protective score for each SNP pair, used in combined model
-#
+def save_sparse_array(path, arrays, compressed=False):
+    out = {}
+    for name, A in arrays.items():
+        A = A.tocsr()
+        out[f"{name}__data"] = A.data
+        out[f"{name}__indices"] = A.indices
+        out[f"{name}__indptr"] = A.indptr
+        out[f"{name}__shape"] = np.array(A.shape)
+    (np.savez_compressed if compressed else np.savez)(path, allow_pickle=False, **out)
 
+def load_sparse_array(path):
+    with np.load(path) as f:
+        names = {k.split("__")[0] for k in f.files}
+        return {n: csr_array((f[f"{n}__data"], f[f"{n}__indices"], f[f"{n}__indptr"]),
+                                shape=tuple(f[f"{n}__shape"])) for n in names}
 
 def helper_score_from_counts(cache, g11, x11, g10, x10, g01, x01, g00, x00, alpha1, alpha2, risk, pool, n_workers):
     """Reproduces the original p-value/log-score/filter logic, operating on 1D arrays."""
@@ -67,7 +47,7 @@ def helper_score_from_counts(cache, g11, x11, g10, x10, g01, x01, g00, x00, alph
     # (it was dead code in the original too) so it's omitted.
     return log_out
 
-def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
+def single_model(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=False):
     """Computes the interaction network for a single model (RR, RD, or DD) and saves it to a pickle file.
 
     Args:
@@ -81,32 +61,30 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     """
     t1 = datetime.now()
     print(f'    R={R}, model={model}', end="", flush=True)
-    output_name = f"{project_dir}/intermediate/ssM_mhygessi_{model}_R{R}.pkl"
 
     # loading and reading SNP data
     # read SNP data and convert to dominant and recessive coding
-    with open(f"{project_dir}/intermediate/snp_data.pkl", "rb") as f:
-        snp_data: SNPclass = pickle.load(f)
-    pheno = snp_data.pheno
-    G = snp_data.data  # no missing data (-9) and is type int8.
+    snp_data = np.load(f"{project_dir}/intermediate/snp_data.npz")
+    pheno = snp_data['pheno']
+    G = snp_data['data']  # no missing data (-9) and is type int8.
     # This data is cast to float64 a little below to allow fast matmul with the phenotype vector
     
-    # filter out SNPs that didn't make it through SNP to pathway mapping
-    with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
-        snp_pathway_mapping: snpsetclass = pickle.load(f)
+    # # filter out SNPs that didn't make it through SNP to pathway mapping
+    # with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
+    #     snp_pathway_mapping: snpsetclass = pickle.load(f)
         
-    # subset and reorder the SNP data to match the order of SNPs in the snp to pathway mapping
-    varid_subset = snp_pathway_mapping.spmatrix.index
-    sorter = np.argsort(snp_data.varid)
-    mapper_subset_to_full_varid = sorter[np.searchsorted(snp_data.varid, varid_subset, sorter=sorter)]
-    G_subset = snp_data.data[:, mapper_subset_to_full_varid]
-    
+    # # subset and reorder the SNP data to match the order of SNPs in the snp to pathway mapping
+    # varid_subset = snp_pathway_mapping.spmatrix.index
+    # sorter = np.argsort(snp_data.varid)
+    # mapper_subset_to_full_varid = sorter[np.searchsorted(snp_data.varid, varid_subset, sorter=sorter)]
+    # G_subset = snp_data.data[:, mapper_subset_to_full_varid]
     # print(f"n SNPs={len(snp_pathway_mapping.spmatrix.index)}", end="", flush=True)
+    
     # convert genotype data to dominant and recessive coding with a simple mapping
     dom_map = np.array([0, 1, 1])  # dominant:  0->0, 1->1, 2->1 
     rec_map = np.array([0, 0, 1])  # recessive: 0->0, 1->0, 2->1
-    dataD = dom_map[G_subset]
-    dataR = rec_map[G_subset]
+    dataD = dom_map[G]
+    dataR = rec_map[G]
         
     symmetric_flag = (model == 'RR' or model == 'DD')
     if model == 'RR':
@@ -120,7 +98,7 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
         dataj = dataD
 
     population_size = pheno.shape[0]
-    ## shuffle phenotypes if R != 0
+    # shuffle phenotypes if R != 0
     if R > 0:
         cluster_file = f"{project_dir}/intermediate/PlinkFile.cluster2"
         if not path.exists(cluster_file):
@@ -141,8 +119,8 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     pheno = np.asarray(pheno, dtype=np.float64).ravel()
     s = sx_full.shape[1]
 
-    ## dividing sx for parallel computing (unchanged balancing logic - earlier chunks have
-    ## fewer lower-triangle entries for symmetric models, so chunk boundaries are sqrt-spaced)
+    # dividing sx for parallel computing (unchanged balancing logic - earlier chunks have
+    # fewer lower-triangle entries for symmetric models, so chunk boundaries are sqrt-spaced)
     idx = [0]
     if model == 'RR' or model == 'DD':
         share = s * s / n_jobs
@@ -237,8 +215,8 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     prot_cols = np.concatenate([ r[4] for r in results ])
     prot_vals = np.concatenate([ r[5] for r in results ])
 
-    result_risk = coo_array((risk_vals, (risk_rows, risk_cols)), shape=(s, s)).tocsr()
-    result_protective = coo_array((prot_vals, (prot_rows, prot_cols)), shape=(s, s)).tocsr()
+    result_risk: csr_array = coo_array((risk_vals, (risk_rows, risk_cols)), shape=(s, s)).tocsr()
+    result_protective: csr_array = coo_array((prot_vals, (prot_rows, prot_cols)), shape=(s, s)).tocsr()
 
     if model == 'RR' or model == 'DD':
         # only the strict lower triangle was computed - mirror it. Upper triangle of
@@ -248,24 +226,20 @@ def run(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
     else:
         # RD: full matrix was computed (no triangle dedup) but isn't symmetric by
         # construction - take elementwise max with transpose, zero the diagonal.
-        result_risk = result_risk.maximum(result_risk.T)
+        result_risk = result_risk.maximum(result_risk.T)  # type: ignore
         result_risk.setdiag(0)
         result_risk.eliminate_zeros()
         
-        result_protective = result_protective.maximum(result_protective.T)
+        result_protective = result_protective.maximum(result_protective.T)  # type: ignore
         result_protective.setdiag(0)
         result_protective.eliminate_zeros()
 
-    network = InteractionNetwork(
-        risk=result_risk,
-        protective=result_protective,
-        risk_max_id=None,
-        protective_max_id=None
-    )
+    output_name = f"{project_dir}/intermediate/snp_interaction_networks-{model}-R{R}.npz"
+    save_sparse_array(output_name, {
+        'risk': result_risk,
+        'protective': result_protective
+    }, compressed=compressed)
 
-    with open(output_name, 'wb') as final:
-        pickle.dump(network, final)
-        
     print(f" - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
 def combine_max(rr, rd, dd):
@@ -306,7 +280,7 @@ def combine_max(rr, rd, dd):
     
     return network_max, network_max_id
 
-def combine(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
+def combined_models(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=False):
     """Run the three models (RR, RD, DD) and combine their results into a single InteractionNetwork.
 
     Args:
@@ -319,28 +293,22 @@ def combine(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R, seed):
         R (int): _description_
         seed (int): _description_
     """
-    run(project_dir, 'RR', alpha1, alpha2, n_jobs, n_workers, pool, R, seed)
-    run(project_dir, 'RD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed)
-    run(project_dir, 'DD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed)
+    single_model(project_dir, 'RR', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)
+    single_model(project_dir, 'RD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)
+    single_model(project_dir, 'DD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)
 
     ## load results for 3 models
-    with open(f"{project_dir}/intermediate/ssM_mhygessi_RR_R{R}.pkl", 'rb') as rr_file:
-        rr_network: InteractionNetwork = pickle.load(rr_file)
-    with open(f"{project_dir}/intermediate/ssM_mhygessi_RD_R{R}.pkl", 'rb') as rd_file:
-        rd_network: InteractionNetwork = pickle.load(rd_file)
-    with open(f"{project_dir}/intermediate/ssM_mhygessi_DD_R{R}.pkl", 'rb') as dd_file:
-        dd_network: InteractionNetwork = pickle.load(dd_file)
+    rr_network = load_sparse_array(f"{project_dir}/intermediate/snp_interaction_networks-RR-R{R}.npz")
+    rd_network = load_sparse_array(f"{project_dir}/intermediate/snp_interaction_networks-RD-R{R}.npz")
+    dd_network = load_sparse_array(f"{project_dir}/intermediate/snp_interaction_networks-DD-R{R}.npz")
 
-    risk_max, risk_max_id = combine_max(rr_network.risk, rd_network.risk, dd_network.risk)
-    protective_max, protective_max_id = combine_max(rr_network.protective, rd_network.protective, dd_network.protective)
+    risk_max, risk_max_id = combine_max(rr_network['risk'], rd_network['risk'], dd_network['risk'])
+    protective_max, protective_max_id = combine_max(rr_network['protective'], rd_network['protective'], dd_network['protective'])
 
-    network = InteractionNetwork(
-        risk=risk_max,
-        protective=protective_max,
-        risk_max_id=risk_max_id,
-        protective_max_id=protective_max_id
-    )
-    
-    output_name = f"{project_dir}/intermediate/ssM_mhygessi_combined_R{R}.pkl"
-    with open(output_name, 'wb') as final:
-        pickle.dump(network, final)
+    output_name = f"{project_dir}/intermediate/snp_interaction_networks-combined-R{R}.npz"
+    save_sparse_array(output_name, {
+        'risk': risk_max,
+        'protective': protective_max,
+        'risk_max_id': risk_max_id,
+        'protective_max_id': protective_max_id
+    }, compressed=compressed)

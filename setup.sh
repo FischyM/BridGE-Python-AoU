@@ -7,7 +7,7 @@ chmod u+x cassi/cassi
 
 CURRENTDIR=$(pwd)
 export CURRENTDIR
-export PYTHONPATH=$CURRENTDIR:$CURRENTDIR/scripts:$CURRENTDIR/corefuns
+export PYTHONPATH=$CURRENTDIR:$CURRENTDIR/scripts:$CURRENTDIR/src
 export PATH=$CURRENTDIR:$PATH
 export PATH=$CURRENTDIR/scripts:$PATH
 export PATH=$CURRENTDIR/cassi:$PATH

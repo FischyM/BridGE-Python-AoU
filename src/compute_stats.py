@@ -1,100 +1,29 @@
-import math, pickle, signal, sys
+import math, signal, sys
 import multiprocessing as mp
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_array, issparse
 from scipy.stats import chi2, norm, rankdata
 
-from classes import bpmindclass, InteractionNetwork, Stats, GenstatsOut
 np.seterr(divide='ignore', invalid='ignore')
 
-# genstats() computes BPM/WPM/PATH statistics. Can be run parallel.
-#
-# REFACTOR NOTES
-#   The interaction network mm is a scipy.sparse.csr_array end to end; nothing here ever
-#   materializes a dense (s x s) array.
-#
-#   Everything in the permutation stage is driven by one derived matrix:
-#
-#       A[r, j] = sum_{i in R_r} mm[i, j]        R_r = the r-th distinct BPM ROW SET
-#
-#   i.e. "total interaction weight between row set R_r and SNP j". A is DENSE, and it is
-#   indexed by distinct row set rather than by pathway, because a BPM's block is over SET
-#   DIFFERENCES - bpmindclass stores ind1 = P_a \ P_b and ind2 = P_b \ P_a - so a
-#   pathway-indexed matrix gives the wrong block for any pair whose pathways overlap. Pairs
-#   with disjoint pathways have ind1 == P_a and collapse onto a single shared row, so A only
-#   grows with the number of OVERLAPPING kept pairs. The identity that matters:
-#
-#       sum(mm[:, q][R_r, :][:, C_t]) == sum_{j in C_t} A[r, q[j]]
-#
-#   So a permutation costs one gather of length sum_t |C_t| over the kept BPMs plus a segment
-#   sum, and A is built once per network rather than once per permutation. The column side is
-#   unconstrained - the gather takes each BPM's own ind2 verbatim - so only the row side has to
-#   be a row of A.
-#
-#   This is the whole reason the permutation stage is fast. The previous version evaluated
-#   (mm @ U2).multiply(U1) per permutation with one indicator column PER BPM; that recomputed
-#   mm @ (indicator) once for every BPM and allocated an (s x n_bpm) sparse intermediate each
-#   time. Cost per permutation drops from O(n_bpm * nnz_per_column) to O(sum of kept column-set
-#   sizes) - roughly 10^9 sparse multiply-adds down to ~10^7 element reads.
-#
-#   The OBSERVED (one-pass) BPM sums are hybrid. Disjoint pairs - about three quarters of them
-#   in practice - are read straight off the pathway pair matrix pair = A_path @ pmat, which
-#   gives every pathway pair's block sum in one sparse-times-dense product. Only overlapping
-#   pairs go through the per-BPM sparse product on their stored set-difference lists. WPM and
-#   PATH statistics always use whole pathways (wpm['ind']), so they use A_path throughout.
-#
-#   BPM/WPM ranksum: for a fixed row pathway a, the block mm[P_a, :] and therefore the midranks
-#   of its stored values and its tie correction do not depend on the partner pathway b. They are
-#   computed ONCE per row pathway and reused across all of its partners; only the in/out split
-#   changes. See block_rank_context() / block_mw().
-#
-#   PATH degree: dist_in/dist_out always partition the same vector (sumMM, or a permutation of
-#   it), so the midranks and tie correction are computed once and the per-pathway statistic is
-#   just a rank sum, i.e. P.T @ ranks. Exact, not an approximation.
-#
-#   call_chi2 is a closed-form vectorized 2x2 chi-square instead of bpm_size calls into
-#   scipy.stats.chi2_contingency, and takes the four count columns directly so the (bpm_size x 4)
-#   stacked tables are never materialized.
-#
-#   Worker data sharing is by fork() copy-on-write: publish_shared() installs the read-only
-#   arrays on the module before the pool is created, so A is shared, not copied per worker.
-#
-# BEHAVIOUR NOTES
-#   - BPM pathway ids come from path1names/path2names matched against wpm['pathway'], which is
-#     exact and vectorized. Row position cannot be used: the BPM list is a subset of the upper
-#     triangle once pairs have been filtered upstream by size.
-#   - A BPM's ind1size is the size of a SET DIFFERENCE, not of a pathway. ind1size ==
-#     wpm['indsize'][idx1] is therefore the test for "these two pathways do not overlap", and
-#     is what selects the fast path for the observed sums.
-#   - Empirical p-values are reproducible and prefix-stable. Permutation k is drawn from
-#     SeedSequence(seed, spawn_key=(k,)), so it depends only on the seed and on k - not on
-#     snpPerms, n_workers or n_jobs. A 20-permutation run reproduces the first 10 permutations
-#     of a 10-permutation run with the same seed. Permutations do NOT compound (each is an
-#     independent draw), unlike the original, which reassigned mmtmp and so walked the symmetric
-#     group. Each draw was marginally uniform either way, so the sampled distribution is
-#     unchanged; only the sequence differs.
-#   - Tables that are not valid contingency tables return p = 1 from call_chi2 rather than
-#     raising (as chi2_contingency did) or reporting spurious significance. See call_chi2().
-#   - net_density now actually applies. The quantile cutoffs were previously computed, used only
-#     for a warning, and then discarded (both networks were binarized at 0 regardless, which is
-#     a no-op when every stored value is positive).
-#
-# INPUTS:
-#   ssmFile: Interaction networks file in the pickle format.
-#   binary_flag: If True, interaction scores are binarized for computing BPM/WPM/PATH significances
-#   snp_perms: Number of snp permutations used for computing empirical p-values
-#   n_jobs: number of sequential chunks the big passes are split into (lower peak RAM)
-#   n_workers: number of parallel cpu cores the program shoud use (higher throughput)
-#   seed: RNG seed for the SNP permutation stage
-#
-# OUTPUTS:
-#   genstats_<ssmFile without extension>.pkl - This pickle file contains a GenstasOut class, which itself contains 2 Stats class oject
-#       - protective_stats: Statistics for protective network including ranksum scores,empirical p-values, expected density for BPM/WPMs
-#       - risk_stats: Statistics for risk network including ranksum scores,empirical p-values, expected density for BPM/WPMs
 
+# ---------------------------------------------------------------------------
+# sparse array saving and loading functions
+# ---------------------------------------------------------------------------
+
+def load_sparse_array(path):
+    with np.load(path) as f:
+        names = {k.split("__")[0] for k in f.files}
+        return {n: csr_array((f[f"{n}__data"], f[f"{n}__indices"], f[f"{n}__indptr"]),
+                                shape=tuple(f[f"{n}__shape"])) for n in names}
+
+# ---------------------------------------------------------------------------
+# tracking permutation args
+# ---------------------------------------------------------------------------
 
 class perm_args:
     def __init__(self, lo, hi):
@@ -514,14 +443,21 @@ def bpm_pathway_ids(bpm, wpm):
     return idx1.astype(np.int32), idx2.astype(np.int32)
 
 
-def rungenstats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed):
-    # inputs:
-    # - input_network: scipy.sparse interaction network (csr_array)
-    # - bpm: bpm dataframe (ind1/ind2 are SET DIFFERENCES: P_a \ P_b and P_b \ P_a)
-    # - wpm: wpm dataframe (ind is the whole pathway)
-    # - binary_flag: flag to make the interaction network binary
-    # - n_jobs: sequential work chunks (RAM), n_workers: pool width (speed)
-    # - seed: RNG seed for the SNP permutation stage
+def run_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, output_file, compressed=False):
+    """Compute BPM/WPM/PATH statistics for one network with SNP permutations.
+
+    Args:
+        input_network (csr_array): SNP-SNP interaction network
+        bpm (pd.DataFrame): BPM table with columns of pathway SNP indices
+        wpm (pd.DataFrame): WPM table with columns of pathway SNP indices
+        binary_flag (bool): convert input_network to binary (0/1) before computing statistics
+        snp_perms (int): number of SNP permutations to perform for empirical p-value estimation
+        n_jobs (int): number of sequential chunks to split the big passes into (lower peak RAM)
+        n_workers (int): number of CPU cores to use (higher throughput)
+        seed (int): number for random number generator seed for SNP permutation stage
+        output_file (str): output file path to save the computed statistics
+        compressed (bool, optional): flag to compress the output. Defaults to False.
+    """
 
     n_jobs = max(int(n_jobs), 1)
     n_workers = max(int(n_workers), 1)
@@ -787,9 +723,9 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_worke
             block = mm[id1, :]
             ranks, ties, z_tot = block_rank_context(block, s)
             mask[id1] = True
-            inside = mask[block.indices]
+            inside = mask[block.indices]  # type: ignore
             mask[id1] = False
-            wpmsum[a] = block.data[inside].sum()
+            wpmsum[a] = block.data[inside].sum()  # type: ignore
             wpm_local_tmp[a] = block_mw(ranks, ties, z_tot, inside,
                                         id1.size * id1.size, id1.size * (s - id1.size))
         density_wpm[ind2keep_wpm] = wpmsum[ind2keep_wpm] / wpmsize[ind2keep_wpm]
@@ -847,7 +783,7 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_worke
     # row per BPM.
     perm_rows = [row_sets[i] for i in keep_pos] + [path_lists[a] for a in kept_wpm]
     row_ids, distinct_rows = dedupe_sets(perm_rows)
-    gb = len(distinct_rows) * s * 8 / 1e9
+    # gb = len(distinct_rows) * s * 8 / 1e9
     # print(f"[A: {len(distinct_rows):,} row sets x {s:,} SNPs = {gb:.1f} GB] ", end="", flush=True)
     A_rows = row_set_sums(mm, distinct_rows, n_jobs)
     A_flat = A_rows.ravel()
@@ -911,45 +847,59 @@ def rungenstats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_worke
     wpm_local_pv[ind2keep_wpm] = (count_wpm + 1) / snp_perms
     path_degree_pv[ind2keep_path] = (count_path + 1) / snp_perms
 
-    stats_obj = Stats(
-        bpm_local=bpm_local,
-        bpm_local_pv=bpm_local_pv,
-        density_bpm=density_bpm,
-        density_bpm_expected=density_bpm_expected,
-        dense_index=dense_index,
-        wpm_local=wpm_local,
-        wpm_local_pv=wpm_local_pv,
-        density_wpm=density_wpm,
-        density_wpm_expected=density_wpm_expected,
-        path_degree=path_degree,
-        path_degree_pv=path_degree_pv
-    )
+    # save to .npz file
+    if compressed:
+        np.savez_compressed(
+            output_file, allow_pickle=False,
+            bpm_local=bpm_local,
+            bpm_local_pv=bpm_local_pv,
+            density_bpm=density_bpm,
+            density_bpm_expected=density_bpm_expected,
+            dense_index=dense_index,
+            wpm_local=wpm_local,
+            wpm_local_pv=wpm_local_pv,
+            density_wpm=density_wpm,
+            density_wpm_expected=density_wpm_expected,
+            path_degree=path_degree,
+            path_degree_pv=path_degree_pv,
+            
+        )
+    else:
+        np.savez(
+            output_file, allow_pickle=False,
+            bpm_local=bpm_local,
+            bpm_local_pv=bpm_local_pv,
+            density_bpm=density_bpm,
+            density_bpm_expected=density_bpm_expected,
+            dense_index=dense_index,
+            wpm_local=wpm_local,
+            wpm_local_pv=wpm_local_pv,
+            density_wpm=density_wpm,
+            density_wpm_expected=density_wpm_expected,
+            path_degree=path_degree,
+            path_degree_pv=path_degree_pv
+        )
 
-    return stats_obj
-
-def genstats(project_dir, ssmfile, binary_flag, net_density, snp_perms, n_jobs, n_workers, seed):
-
+def pathway_stats(project_dir, snp_int_file, binary_flag, net_density, snp_perms, n_jobs, n_workers, seed, compressed=False):
+    
     # load pathway indices
-    with open(f"{project_dir}/intermediate/pathway_indices.pkl", 'rb') as f:
-        pathway_indices: bpmindclass = pickle.load(f)
-    bpm = pathway_indices.bpm
-    wpm = pathway_indices.wpm
-    print(f"\tloaded {bpm.shape[0]:,} BPMs and {wpm.shape[0]} WPMs", flush=True)
+    bpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
+    wpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet")
+    print(f"    loaded {bpm.shape[0]:,} BPMs and {wpm.shape[0]} WPMs", flush=True)
 
     # load interaction network
-    with open(ssmfile, 'rb') as f:
-        network: InteractionNetwork = pickle.load(f)
-    p_network: csr_array = as_sparse(network.protective)
-    r_network: csr_array = as_sparse(network.risk)
-
-    print(f"\tloaded protective and risk networks with {p_network.shape[0]:,} SNPs", flush=True)
-    print(f"\t{p_network.shape[0] * p_network.shape[1]:,} entries in the SNP-SNP interaction network", flush=True)
+    snp_int_file = Path(snp_int_file)
+    snp_network = load_sparse_array(snp_int_file)
+    p_network = as_sparse(snp_network['protective'])
+    r_network = as_sparse(snp_network['risk'])
+    print(f"    loaded protective and risk networks with {p_network.shape[0]:,} SNPs", flush=True)
+    print(f"    {p_network.shape[0] * p_network.shape[1]:,} entries in the SNP-SNP interaction network", flush=True)
 
     p_density = p_network.nnz / (p_network.shape[0] * p_network.shape[1]) * 100
-    print(f"\t{p_density:.2f}% of the entries are nonzero in protective network", flush=True)
+    print(f"    {p_density:.2f}% of the entries are nonzero in protective network", flush=True)
 
     r_density = r_network.nnz / (r_network.shape[0] * r_network.shape[1]) * 100
-    print(f"\t{r_density:.2f}% of the entries are nonzero in risk network", flush=True)
+    print(f"    {r_density:.2f}% of the entries are nonzero in risk network", flush=True)
 
     if binary_flag:
         if net_density is None:
@@ -965,20 +915,20 @@ def genstats(project_dir, ssmfile, binary_flag, net_density, snp_perms, n_jobs, 
             tiny = np.finfo(np.float64).tiny
             for name, cutoff in (('protective', p_cutoff), ('risk', r_cutoff)):
                 if cutoff <= 0:
-                    print(f"\twarning: net_density={net_density} puts the {name} cutoff at "
+                    print(f"    warning: net_density={net_density} puts the {name} cutoff at "
                           f"{cutoff}; keeping all nonzero entries instead of densifying", flush=True)
             p_network = binarize(p_network, max(p_cutoff, tiny))
             r_network = binarize(r_network, max(r_cutoff, tiny))
 
-    print(f"running genstats on protective network", flush=True)
-    protective_stats = rungenstats(p_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed)
+    print(f"  running genstats on protective network", flush=True)
+    new_prot_name = f"pathway_stats-prot-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
+    prot_output_file = snp_int_file.with_name(new_prot_name)
+    run_stats(p_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, prot_output_file, compressed=compressed)
 
-    print(f"running genstats on risk network", flush=True)
-    risk_stats = rungenstats(r_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed)
+    print(f"  running genstats on risk network", flush=True)
+    new_risk_name = f"pathway_stats-risk-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
+    risk_output_file = snp_int_file.with_name(new_risk_name)
+    run_stats(r_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, risk_output_file, compressed=compressed)
 
     print(flush=True)
-    out_obj = GenstatsOut(protective_stats, risk_stats)
-
-    output_file = f"{project_dir}/intermediate/genstats_{ssmfile.split('/')[-1]}"
-    with open(output_file, 'wb') as f:
-        pickle.dump(out_obj, f)
+    

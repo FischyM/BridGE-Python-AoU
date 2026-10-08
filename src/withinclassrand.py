@@ -3,7 +3,7 @@ import copy, pickle, sys
 import numpy as np
 import pandas as pd
 
-from classes import snpsetclass
+from src.classes import snpsetclass
 
 
 def withinclassrand(seed, plinkCluster, datafile):

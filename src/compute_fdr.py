@@ -1,9 +1,7 @@
-import pickle
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
-from classes import Stats, GenstatsOut, fdrrclass
 
 
 # fdrsampleperm() computes False Discovery Rates for BPM/WPM/PATH modules
@@ -154,7 +152,7 @@ def _dominance_min(pv, s, f):
 # Main funcs for calculate_fdr
 # ---------------------------------------------------------------------------
 
-def calculate_fdr(sdf, pvdf, pcut, N, type):
+def fdr_helper(sdf, pvdf, pcut, N, type):
     # inputs:
     # - sdf, pvdf: (n_rows, N+1) arrays of ranksum scores and empirical p-values,
     #   column 0 = real network, columns 1..N = random networks
@@ -205,29 +203,35 @@ def calculate_fdr(sdf, pvdf, pcut, N, type):
     return _frame(rfdr1, type + '1'), _frame(rfdr2, type + '2')
 
 
-def fdrsampleperm(project_dir, ssmfile, pcut, R):
+def calculate_fdr(snp_int_file, pcut, R, compressed=False):
+    
+    snp_int_file = Path(snp_int_file)
+    new_prot_name = f"pathway_stats-prot-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
+    prot_tmp_file = snp_int_file.with_name(new_prot_name)
+    new_risk_name = f"pathway_stats-risk-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
+    risk_tmp_file = snp_int_file.with_name(new_risk_name)
+    
+
     # one entry per network, keyed exactly like the original DataFrame columns
     bpm_data, bpm_pv_data = {}, {}
     wpm_data, wpm_pv_data = {}, {}
     path_data, path_pv_data = {}, {}
 
-    print(f"    Loading genstats files for 1 real network and {R} random networks...")
+    print(f"    Loading pathway stat files for 1 real network and {R} random networks...")
     for i in range(R+1):
-        # load genstats file
-        tmp_ssmFile = ssmfile.replace("_R0", "_R" + str(i))
-        genstats_file = f"{project_dir}/intermediate/genstats_{tmp_ssmFile.split('/')[-1]}"
-        with open(genstats_file, "rb") as pklin:
-            gs: GenstatsOut = pickle.load(pklin)
-        prot: Stats = gs.protective_stats
-        risk: Stats = gs.risk_stats
+        # load pathway stat files
+        tmp_prot_file = prot_tmp_file.with_name(prot_tmp_file.name.replace("-R0", f"-R{i}"))
+        prot = np.load(tmp_prot_file)
+        tmp_risk_file = risk_tmp_file.with_name(risk_tmp_file.name.replace("-R0", f"-R{i}"))
+        risk = np.load(tmp_risk_file)
 
         # retrieve bpm/wpm/path stats, protective followed by risk
-        bpm_data["bpm" + str(i)] = np.concatenate((prot.bpm_local, risk.bpm_local))
-        bpm_pv_data["bpm_pv" + str(i)] = np.concatenate((prot.bpm_local_pv, risk.bpm_local_pv))
-        wpm_data["wpm" + str(i)] = np.concatenate((prot.wpm_local, risk.wpm_local))
-        wpm_pv_data["wpm_pv" + str(i)] = np.concatenate((prot.wpm_local_pv, risk.wpm_local_pv))
-        path_data["path" + str(i)] = np.concatenate((prot.path_degree, risk.path_degree))
-        path_pv_data["path_pv" + str(i)] = np.concatenate((prot.path_degree_pv, risk.path_degree_pv))
+        bpm_data[f"bpm{i}"] = np.concatenate((prot['bpm_local'], risk['bpm_local']))
+        bpm_pv_data[f"bpm_pv{i}"] = np.concatenate((prot['bpm_local_pv'], risk['bpm_local_pv']))
+        wpm_data[f"wpm{i}"] = np.concatenate((prot['wpm_local'], risk['wpm_local']))
+        wpm_pv_data[f"wpm_pv{i}"] = np.concatenate((prot['wpm_local_pv'], risk['wpm_local_pv']))
+        path_data[f"path{i}"] = np.concatenate((prot['path_degree'], risk['path_degree']))
+        path_pv_data[f"path_pv{i}"] = np.concatenate((prot['path_degree_pv'], risk['path_degree_pv']))
 
     # stack into (n_rows, N+1) arrays; column 0 is the real network
     bpm = _stack(bpm_data)
@@ -238,9 +242,9 @@ def fdrsampleperm(project_dir, ssmfile, pcut, R):
     path_pv = _stack(path_pv_data)
 
     print(f"    Computing FDRs for {bpm.shape[0]} BPMs, {wpm.shape[0]} WPMs, and {path.shape[0]} PATHs...")
-    fdrbpm1, fdrbpm2 = calculate_fdr(bpm, bpm_pv, pcut, R, 'bpm')
-    fdrwpm1, fdrwpm2 = calculate_fdr(wpm, wpm_pv, pcut, R, 'wpm')
-    fdrpath1, fdrpath2 = calculate_fdr(path, path_pv, pcut, R, 'path')
+    fdrbpm1, fdrbpm2 = fdr_helper(bpm, bpm_pv, pcut, R, 'bpm')
+    fdrwpm1, fdrwpm2 = fdr_helper(wpm, wpm_pv, pcut, R, 'wpm')
+    fdrpath1, fdrpath2 = fdr_helper(path, path_pv, pcut, R, 'path')
 
     bpm_ranksum = _frame(bpm[:, 0], 'bpm_ranksum')
     wpm_ranksum = _frame(wpm[:, 0], 'wpm_ranksum')
@@ -249,14 +253,41 @@ def fdrsampleperm(project_dir, ssmfile, pcut, R):
     wpm_pv = _frame(wpm_pv[:, 0], 'wpm_pv')
     path_pv = _frame(path_pv[:, 0], 'path_pv')
 
-    output_file = f"{project_dir}/intermediate/results_{ssmfile.split('/')[-1]}"
-    out_obj = fdrrclass(
-        bpm_pv=bpm_pv, wpm_pv=wpm_pv, path_pv=path_pv,
-        bpm_ranksum=bpm_ranksum, wpm_ranksum=wpm_ranksum, path_ranksum=path_ranksum,
-        fdrbpm1=fdrbpm1, fdrbpm2=fdrbpm2,
-        fdrwpm1=fdrwpm1, fdrwpm2=fdrwpm2,
-        fdrpath1=fdrpath1, fdrpath2=fdrpath2,
-        )
 
-    with open(output_file, 'wb') as f:
-        pickle.dump(out_obj, f)
+    result_file_name = f"results-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
+    output_file = snp_int_file.with_name(result_file_name)
+
+    # save to .npz file
+    if compressed:
+        np.savez_compressed(
+            output_file, allow_pickle=False,
+            bpm_pv=bpm_pv,
+            wpm_pv=wpm_pv,
+            path_pv=path_pv,
+            bpm_ranksum=bpm_ranksum,
+            wpm_ranksum=wpm_ranksum,
+            path_ranksum=path_ranksum,
+            fdrbpm1=fdrbpm1,
+            fdrbpm2=fdrbpm2,
+            fdrwpm1=fdrwpm1,
+            fdrwpm2=fdrwpm2,
+            fdrpath1=fdrpath1,
+            fdrpath2=fdrpath2,
+        )
+    else:
+        np.savez(
+            output_file, allow_pickle=False,
+            bpm_pv=bpm_pv,
+            wpm_pv=wpm_pv,
+            path_pv=path_pv,
+            bpm_ranksum=bpm_ranksum,
+            wpm_ranksum=wpm_ranksum,
+            path_ranksum=path_ranksum,
+            fdrbpm1=fdrbpm1,
+            fdrbpm2=fdrbpm2,
+            fdrwpm1=fdrwpm1,
+            fdrwpm2=fdrwpm2,
+            fdrpath1=fdrpath1,
+            fdrpath2=fdrpath2,
+        )
+    
