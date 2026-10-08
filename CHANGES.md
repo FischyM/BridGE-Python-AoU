@@ -116,9 +116,6 @@ conda env export > env.yml
 - add in memory tracking for users to identify best configuration of n_workers and n_jobs
 - bpmind.py saves wpmsize as (n^2 - n)
   - In WPM chi2 calculations, it does appear that wpmgi is calculated as the full matrix, so then the size would be doubled and this would then be accounted for
-- binarizing the network when binary_flag is false TODO:
-  - uses a cutoff of 0.2, or ~0.63 pvalue
-  - should this be lowered to a threshold of 1.0 which corresponds to a pvalue threshold of 0.1, the same threshold used for chi2 filtering? TODO:
 - wpm ranksum calculation
   - original code had "density_wpm" misspelled as "denisty_wpm", so the density_wpm variable had the old calculated densities from WPM chi2 calculations.
   - for WPMs that pass ranksum and are kept have their densities updated from a new wpmsum, but the older densities that passed chi2 but not ranksums are kept in this returned array
