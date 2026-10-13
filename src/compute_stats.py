@@ -587,7 +587,8 @@ def run_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers
     del chi2_bpm_1, chi2_bpm_2, density_bpm_local_1, density_bpm_local_2, under1, under2
 
     # keeping track of significant bpms
-    ind2keep_bpm = (chi2_bpm_local >= (-1.0 * np.log10(0.1)))
+    # ind2keep_bpm = ((chi2_bpm_local >= (-1.0 * np.log10(0.1))) & (bpmind1size >= min_path) & (bpmind2size >= min_path))
+    ind2keep_bpm = chi2_bpm_local >= (-1.0 * np.log10(0.1))
 
     # keeping denser pathway first. The SNP lists are swapped as references, and the pathway
     # ids and sumMM totals are swapped alongside them so both stay consistent.
@@ -848,37 +849,20 @@ def run_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers
     path_degree_pv[ind2keep_path] = (count_path + 1) / snp_perms
 
     # save to .npz file
-    if compressed:
-        np.savez_compressed(
-            output_file, allow_pickle=False,
-            bpm_local=bpm_local,
-            bpm_local_pv=bpm_local_pv,
-            density_bpm=density_bpm,
-            density_bpm_expected=density_bpm_expected,
-            dense_index=dense_index,
-            wpm_local=wpm_local,
-            wpm_local_pv=wpm_local_pv,
-            density_wpm=density_wpm,
-            density_wpm_expected=density_wpm_expected,
-            path_degree=path_degree,
-            path_degree_pv=path_degree_pv,
-            
-        )
-    else:
-        np.savez(
-            output_file, allow_pickle=False,
-            bpm_local=bpm_local,
-            bpm_local_pv=bpm_local_pv,
-            density_bpm=density_bpm,
-            density_bpm_expected=density_bpm_expected,
-            dense_index=dense_index,
-            wpm_local=wpm_local,
-            wpm_local_pv=wpm_local_pv,
-            density_wpm=density_wpm,
-            density_wpm_expected=density_wpm_expected,
-            path_degree=path_degree,
-            path_degree_pv=path_degree_pv
-        )
+    out = {
+        'bpm_local': bpm_local,
+        'bpm_local_pv': bpm_local_pv,
+        'density_bpm': density_bpm,
+        'density_bpm_expected': density_bpm_expected,
+        'dense_index': dense_index,
+        'wpm_local': wpm_local,
+        'wpm_local_pv': wpm_local_pv,
+        'density_wpm': density_wpm,
+        'density_wpm_expected': density_wpm_expected,
+        'path_degree': path_degree,
+        'path_degree_pv': path_degree_pv
+    }
+    (np.savez_compressed if compressed else np.savez)(output_file, allow_pickle=False, **out)
 
 def pathway_stats(project_dir, snp_int_file, binary_flag, net_density, snp_perms, n_jobs, n_workers, seed, compressed=False):
     

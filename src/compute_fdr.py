@@ -258,36 +258,19 @@ def calculate_fdr(snp_int_file, pcut, R, compressed=False):
     output_file = snp_int_file.with_name(result_file_name)
 
     # save to .npz file
-    if compressed:
-        np.savez_compressed(
-            output_file, allow_pickle=False,
-            bpm_pv=bpm_pv,
-            wpm_pv=wpm_pv,
-            path_pv=path_pv,
-            bpm_ranksum=bpm_ranksum,
-            wpm_ranksum=wpm_ranksum,
-            path_ranksum=path_ranksum,
-            fdrbpm1=fdrbpm1,
-            fdrbpm2=fdrbpm2,
-            fdrwpm1=fdrwpm1,
-            fdrwpm2=fdrwpm2,
-            fdrpath1=fdrpath1,
-            fdrpath2=fdrpath2,
-        )
-    else:
-        np.savez(
-            output_file, allow_pickle=False,
-            bpm_pv=bpm_pv,
-            wpm_pv=wpm_pv,
-            path_pv=path_pv,
-            bpm_ranksum=bpm_ranksum,
-            wpm_ranksum=wpm_ranksum,
-            path_ranksum=path_ranksum,
-            fdrbpm1=fdrbpm1,
-            fdrbpm2=fdrbpm2,
-            fdrwpm1=fdrwpm1,
-            fdrwpm2=fdrwpm2,
-            fdrpath1=fdrpath1,
-            fdrpath2=fdrpath2,
-        )
+    out = {
+        'bpm_pv': bpm_pv,
+        'wpm_pv': wpm_pv,
+        'path_pv': path_pv,
+        'bpm_ranksum': bpm_ranksum,
+        'wpm_ranksum': wpm_ranksum,
+        'path_ranksum': path_ranksum,
+        'fdrbpm1': fdrbpm1,
+        'fdrbpm2': fdrbpm2,
+        'fdrwpm1': fdrwpm1,
+        'fdrwpm2': fdrwpm2,
+        'fdrpath1': fdrpath1,
+        'fdrpath2': fdrpath2,
+    }
+    (np.savez_compressed if compressed else np.savez)(output_file, allow_pickle=False, **out)
     

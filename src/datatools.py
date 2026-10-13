@@ -70,10 +70,10 @@ def convert_plink(pgen_file, pvar_file, psam_file, output_file, compressed=False
     print(f"        Percentage of missing values: {( np.sum(G == -9) / G.size ):.2%}")
     
     # TODO: decide what to do with missing values: set to zero or impute with mode
-    # print("    Setting any missing values to zero")
-    # G[G == -9] = 0
-    print("    Setting any missing values to the most frequent value (mode) for that SNP")
-    G = imputesnp(G)
+    print("    Setting any missing values to zero")
+    G[G == -9] = 0
+    # print("    Setting any missing values to the most frequent value (mode) for that SNP")
+    # G = imputesnp(G)
 
     maf = np.mean(G, axis=0) / 2
     plt.hist(maf, bins=50)
@@ -82,28 +82,16 @@ def convert_plink(pgen_file, pvar_file, psam_file, output_file, compressed=False
     plt.savefig(output_file.replace('.npz', '.maf.png'))
     
     # compressed takes longer, but saves space. Consider using compressed for large datasets.
-    if compressed:
-        np.savez_compressed(
-            file=output_file, allow_pickle=False,
-            data=G,
-            varid=variant_df.ID.to_numpy().astype(str),
-            chrom=variant_df['#CHROM'],
-            pos=variant_df.POS,
-            pheno=sample_df.PHENO1 - 1,
-            iid=sample_df.IID,
-            sex=sample_df.SEX,
-            )
-    else:
-        np.savez(
-            file=output_file, allow_pickle=False,
-            data=G,
-            varid=variant_df.ID.to_numpy().astype(str),
-            chrom=variant_df['#CHROM'],
-            pos=variant_df.POS,
-            pheno=sample_df.PHENO1 - 1,
-            iid=sample_df.IID,
-            sex=sample_df.SEX,
-            )
+    out = {
+        "data": G,
+        "varid": variant_df.ID.to_numpy().astype(str),
+        "chrom": variant_df['#CHROM'],
+        "pos": variant_df.POS,
+        "pheno": sample_df.PHENO1 - 1,
+        "iid": sample_df.IID,
+        "sex": sample_df.SEX,
+    }
+    (np.savez_compressed if compressed else np.savez)(output_file, allow_pickle=False, **out)
 
 
 def gene2pathway(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap_cutoff, min_size, max_size, output_file):
@@ -226,7 +214,6 @@ def gene2pathway(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap
 
     print(f"    {len(gene_pathway_df)} genes, {len(gene_pathway_df.columns)} pathways")
     gene_pathway_df.to_parquet(output_file, index=True, compression='zstd')
-    # gene_pathway_df = pd.read_parquet(output_file)
     
     # save filtered dataframes to csv for inspection
     with open(symbols_file.replace(".symbols.gmt", ".filtered.symbols.gmt"), 'w') as f:
@@ -307,8 +294,7 @@ def snp2gene(pvar_file, gene_annotation_file, output_file):
     print(f"    removed {len(variant_df) - len(snplist)} SNPs")
     print(f"    {len(snplist)} SNPs, {len(genelist)} genes")
     snp_gene_df.to_parquet(output_file, index=True, compression='zstd')
-    # snp_gene_df = pd.read_parquet(output_file)
-    
+        
 
 def snp2pathway(project_dir, output_file):
     """Creates a snp-to-pathway mapping from snp-to-gene and gene-to-pathway mapping dataframes.
@@ -344,7 +330,6 @@ def snp2pathway(project_dir, output_file):
                                 columns=pd.Series(tmp_gpm.columns, name='pathway'))
     print(f"    {snp_pathway_df.shape[0]} SNPs, {snp_pathway_df.shape[1]} pathways")
     snp_pathway_df.to_parquet(output_file, index=True, compression='zstd')
-    # snp_pathway_df = pd.read_parquet(output_file)
 
 
 def _bpm_row(snp_pathway_np, i):
@@ -410,22 +395,20 @@ def pathway_indices(project_dir, min_path, n_workers, output_file):
         })
     
     # filter out pathways that are too small given the available SNPs in the WPM
-    # TODO: change back?
     wpm = wpm[(wpm['indsize'] >= min_path)].reset_index(drop=True)
     print(f"    Total WPMs after filtering with min_path={min_path}: {len(wpm):,} / {len(pathways):,}")
     wpm.to_parquet(f"{output_file}-wpm.parquet", index=True, compression='snappy')
 
     # Finding all possible combinations of pairs for pathway names and sizes.
-    # combnames = np.array(list(combinations(pathways.index, 2))) TODO: change back?
-    combnames = np.array(list(combinations(wpm['pathway'], 2)))
-    snp_pathway_np_subset = snp_pathway_df.loc[:, wpm['pathway'].to_list()].to_numpy()  # TODO: remove?
-
+    # combnames = np.array(list(combinations(wpm['pathway'], 2)))
+    combnames = np.array(list(combinations(pathways.index, 2)))
+    
     # Finding BPM indices: one task per pathway i covers all pairs (i, j > i).
     # Parallel returns results in input order, so the flattened lists line up with combnames.
     if n_workers is None:
         n_workers = -1
     rows = Parallel(n_jobs=n_workers)(
-        delayed(_bpm_row)(snp_pathway_np_subset, i) for i in range(len(wpm))
+        delayed(_bpm_row)(snp_pathway_np, i) for i in range(len(wpm))
     )
     BPMind1, BPMind2, ind1size, ind2size = [], [], [], []
     for flat1, flat2, row_ind1size, row_ind2size in rows:  # type: ignore
@@ -446,7 +429,7 @@ def pathway_indices(project_dir, min_path, n_workers, output_file):
         })
 
     # filter out pathways that are too small after removing SNPs that are in both pathways of a BPM
-    # bpm = bpm[(bpm['ind1size'] >= min_path) & (bpm['ind2size'] >= min_path)].reset_index(drop=True)  TODO: change back?
+    bpm = bpm[(bpm['ind1size'] >= min_path) & (bpm['ind2size'] >= min_path)].reset_index(drop=True)
     print(f"    Total BPMs after filtering with min_path={min_path}: {len(bpm):,} / {len(combnames):,}")
     bpm.to_parquet(f"{output_file}-bpm.parquet", index=True, compression='zstd')
 
