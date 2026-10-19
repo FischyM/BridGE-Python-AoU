@@ -69,7 +69,7 @@ def convert_plink(pgen_file, pvar_file, psam_file, output_file, compressed=False
     print(f"        Percentage of zero values: {(G.size - np.count_nonzero(G)) / G.size:.2%}")
     print(f"        Percentage of missing values: {( np.sum(G == -9) / G.size ):.2%}")
     
-    # TODO: decide what to do with missing values: set to zero or impute with mode
+    # decide what to do with missing values: set to zero or impute with mode
     print("    Setting any missing values to zero")
     G[G == -9] = 0
     # print("    Setting any missing values to the most frequent value (mode) for that SNP")

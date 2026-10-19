@@ -2,7 +2,7 @@ import argparse, psutil, signal, sys, threading, time
 import multiprocessing as mp
 from os import path
 
-from src import datatools as dt
+from src import data_tools as dt
 from src import compute_interactions as ci
 from src import compute_stats as cs
 from src import compute_fdr as fdr
@@ -131,10 +131,10 @@ def run_compute_interaction(args):
         indices = range(args.r + 1) if args.r >= 0 else [args.i]
         for i in indices:
             if args.model == 'combined':
-                ci.combined_models(args.project_dir, args.alpha1, args.alpha2, args.n_jobs,
+                ci.run_combined(args.project_dir, args.alpha1, args.alpha2, args.n_jobs,
                                    args.n_workers, pool, i, args.seed, compressed=args.compressed)
             else:
-                ci.single_model(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs,
+                ci.run_single(args.project_dir, args.model, args.alpha1, args.alpha2, args.n_jobs,
                                 args.n_workers, pool, i, args.seed, compressed=args.compressed)
         pool.close()
         pool.join()
@@ -173,7 +173,7 @@ def run_compute_stats(args):
     if args.ssm_file is not None:
         snp_int_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
         print(f'Computing statistics on {args.ssm_file}')
-        cs.pathway_stats(args.project_dir, snp_int_file, args.binary_network, args.density_cutoff, 
+        cs.run_stats(args.project_dir, snp_int_file, args.binary_network, args.density_cutoff, 
                     args.snp_perms, args.n_jobs, args.n_workers, args.seed, compressed=args.compressed)
 
     else:
@@ -181,7 +181,7 @@ def run_compute_stats(args):
         for i in indices:
             snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R{i}.npz"
             print(f'Computing statistics on {args.model}_R{i}')
-            cs.pathway_stats(args.project_dir, snp_int_file, args.binary_network, args.density_cutoff,
+            cs.run_stats(args.project_dir, snp_int_file, args.binary_network, args.density_cutoff,
                         args.snp_perms, args.n_jobs, args.n_workers, args.seed, compressed=args.compressed)
             
     stop_event.set()
@@ -198,7 +198,7 @@ def run_compute_fdr(args):
         snp_int_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
 
     print(f'Computing FDR')
-    fdr.calculate_fdr(snp_int_file, args.pval_cutoff, args.r, compressed=args.compressed)
+    fdr.run_fdr(snp_int_file, args.pval_cutoff, args.r, compressed=args.compressed)
 
 
 def run_summarize(args):
@@ -210,7 +210,7 @@ def run_summarize(args):
         snp_int_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
     
     print(f'Summarizing results')
-    cr.collectresults(args.project_dir, snp_int_file, args.model, args.fdr_cutoff, imported, args.density_cutoff)
+    cr.run_results(args.project_dir, snp_int_file, args.model, args.fdr_cutoff, imported, args.density_cutoff)
 
 
 MODULES_RUN = {

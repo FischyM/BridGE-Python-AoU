@@ -3,9 +3,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src import get_interaction_pair as gpair
+from src import get_interaction_pairs as gpair
 from src import check_BPM_WPM_redundancy as cbwr
-from src import pathway_map as pmap
+from src import plot_pathway as path_plot
 
 
 FDR_STEP = 0.05
@@ -57,7 +57,7 @@ def _group_column(groups_per_level, order, label):
     return labels.astype(np.int64).reset_index(drop=True).to_frame('group')
 
 
-def collectresults(project_dir, snp_int_file, model, fdrcut, imported_ssm, densitycutoff):
+def run_results(project_dir, snp_int_file, model, fdrcut, imported_ssm, densitycutoff):
     """Collects BPM/WPM/PATH results and exports them to an Excel workbook.
 
     Also calls out to driver-gene discovery and redundant-module grouping.
@@ -179,7 +179,7 @@ def collectresults(project_dir, snp_int_file, model, fdrcut, imported_ssm, densi
             )
     print(f"    Found {len(BPM_nosig_noRD)} non-redundant BPMs, {len(WPM_nosig_noRD)} non-redundant WPMs, and {len(PATH_nosig_noRD)} non-redundant PATHs below FDR {fdrcut}.")
 
-    pmap.draw_map(project_dir, fdrcut, output_file, BPM_groups, WPM_groups, PATH_groups, fdrBPM['fdrbpm2'])
+    path_plot.draw_map(project_dir, fdrcut, output_file, BPM_groups, WPM_groups, PATH_groups, fdrBPM['fdrbpm2'])
 
 
     # --- output tables ------------------------------------------------------

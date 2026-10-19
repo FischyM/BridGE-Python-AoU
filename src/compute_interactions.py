@@ -1,13 +1,58 @@
+import functools
 import math
 from datetime import datetime
 from os import path
 
 import numpy as np
+from scipy.stats import hypergeom
 from scipy.sparse import coo_array, csr_array
 
-from src import HygeCache as hc
 from src import withinclassrand as wrand
 
+
+# @functools.lru_cache(maxsize=2_000_000)
+@functools.cache
+def _hyge_single(n, d, g, x):
+    """Single-value hypergeom survival function, cached per (n, d, g, x).
+    M (n) - Total number of objects in the population
+    N (d) - Number of objects drawn, without replacement
+    n (g) - Number of “Type I” (success) objects in the population
+    k (x) - Number of successes in the draw
+    
+    The arg 'k-1' is an upper-tail test of P(X >= k)
+    """
+    return hypergeom.sf(x - 1, n, g, d)  # sf(k - 1, M, n, N)
+
+def _hyge_chunk(arg):
+    n, d, g_chunk, x_chunk = arg
+    out = np.empty(len(g_chunk), dtype=np.float64)
+    for i in range(len(g_chunk)):
+        out[i] = _hyge_single(n, d, g_chunk[i], x_chunk[i])
+    return out
+
+class HygeCache:
+    """Drop-in replacement for HygeCache, but dispatches one value at a time
+    per worker with functools cache, instead of vectorized hypergeom.sf calls.
+
+    Caching only pays off if (n, d, g, x) tuples repeat often within a worker's
+    lifetime across calls sharing the same pool. Since g/x are SNP pair counts
+    bounded by population/case size, repeats are plausible after int rounding -
+    but if most tuples are unique, the per-value Python loop + cache-miss overhead
+    will likely be slower than the vectorized scipy call. Worth benchmarking both
+    on real data before swapping in.
+    """
+    def __init__(self, sample_size, case_size, control_size):
+        self.sample_size = sample_size
+        self.case_size = case_size
+        self.control_size = control_size
+
+    def apply_hyge(self, g, x, case_flag, pool, n_workers):
+        d = self.case_size if case_flag else self.control_size
+        g_chunks = np.array_split(g, n_workers)
+        x_chunks = np.array_split(x, n_workers)
+        args = [(self.sample_size, d, gc, xc) for gc, xc in zip(g_chunks, x_chunks)]
+        results = pool.map(_hyge_chunk, args)
+        return np.concatenate(results)
 
 def save_sparse_array(path, arrays, compressed=False):
     out = {}
@@ -47,17 +92,17 @@ def helper_score_from_counts(cache, g11, x11, g10, x10, g01, x01, g00, x00, alph
     # (it was dead code in the original too) so it's omitted.
     return log_out
 
-def single_model(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=False):
+def run_single(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=False):
     """Computes the interaction network for a single model (RR, RD, or DD) and saves it to a pickle file.
 
     Args:
-        project_dir (_type_): _description_
-        model (_type_): _description_
-        alpha1 (_type_): _description_
-        alpha2 (_type_): _description_
-        n_jobs (_type_): _description_
-        n_workers (_type_): _description_
-        R (_type_): _description_
+        project_dir (str): _description_
+        model (str): _description_
+        alpha1 (float): _description_
+        alpha2 (float): _description_
+        n_jobs (int): _description_
+        n_workers (int): _description_
+        R (int): _description_
     """
     t1 = datetime.now()
     print(f'    R={R}, model={model}', end="", flush=True)
@@ -112,7 +157,7 @@ def single_model(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R,
 
     case_size = int(np.count_nonzero(pheno))
     control_size = population_size - case_size
-    cache = hc.HygeCache(population_size, case_size, control_size)
+    cache = HygeCache(population_size, case_size, control_size)
 
     sx_full = np.ascontiguousarray(datai, dtype=np.float64)
     sy_full = np.ascontiguousarray(dataj, dtype=np.float64)
@@ -280,7 +325,7 @@ def combine_max(rr, rd, dd):
     
     return network_max, network_max_id
 
-def combined_models(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=False):
+def run_combined(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=False):
     """Run the three models (RR, RD, DD) and combine their results into a single InteractionNetwork.
 
     Args:
@@ -293,9 +338,9 @@ def combined_models(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R, see
         R (int): _description_
         seed (int): _description_
     """
-    single_model(project_dir, 'RR', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)
-    single_model(project_dir, 'RD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)
-    single_model(project_dir, 'DD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)
+    run_single(project_dir, 'RR', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)
+    run_single(project_dir, 'RD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)
+    run_single(project_dir, 'DD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)
 
     ## load results for 3 models
     rr_network = load_sparse_array(f"{project_dir}/intermediate/snp_interaction_networks-RR-R{R}.npz")

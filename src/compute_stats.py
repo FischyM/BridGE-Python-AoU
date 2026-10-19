@@ -443,7 +443,7 @@ def bpm_pathway_ids(bpm, wpm):
     return idx1.astype(np.int32), idx2.astype(np.int32)
 
 
-def run_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, output_file, compressed=False):
+def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, output_file, compressed=False):
     """Compute BPM/WPM/PATH statistics for one network with SNP permutations.
 
     Args:
@@ -864,7 +864,7 @@ def run_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers
     }
     (np.savez_compressed if compressed else np.savez)(output_file, allow_pickle=False, **out)
 
-def pathway_stats(project_dir, snp_int_file, binary_flag, net_density, snp_perms, n_jobs, n_workers, seed, compressed=False):
+def run_stats(project_dir, snp_int_file, binary_flag, net_density, snp_perms, n_jobs, n_workers, seed, compressed=False):
     
     # load pathway indices
     bpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
@@ -907,12 +907,12 @@ def pathway_stats(project_dir, snp_int_file, binary_flag, net_density, snp_perms
     print(f"  running genstats on protective network", flush=True)
     new_prot_name = f"pathway_stats-prot-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
     prot_output_file = snp_int_file.with_name(new_prot_name)
-    run_stats(p_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, prot_output_file, compressed=compressed)
+    pathway_stats(p_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, prot_output_file, compressed=compressed)
 
     print(f"  running genstats on risk network", flush=True)
     new_risk_name = f"pathway_stats-risk-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
     risk_output_file = snp_int_file.with_name(new_risk_name)
-    run_stats(r_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, risk_output_file, compressed=compressed)
+    pathway_stats(r_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, risk_output_file, compressed=compressed)
 
     print(flush=True)
     

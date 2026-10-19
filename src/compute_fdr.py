@@ -203,7 +203,7 @@ def fdr_helper(sdf, pvdf, pcut, N, type):
     return _frame(rfdr1, type + '1'), _frame(rfdr2, type + '2')
 
 
-def calculate_fdr(snp_int_file, pcut, R, compressed=False):
+def run_fdr(snp_int_file, pcut, R, compressed=False):
     
     snp_int_file = Path(snp_int_file)
     new_prot_name = f"pathway_stats-prot-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
