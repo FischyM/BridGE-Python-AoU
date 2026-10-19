@@ -103,9 +103,6 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
         path1 (DataFrame): One column, pathway-1 name per module.
         path2 (DataFrame): One column, pathway-2 name per module. Same as path1 for WPMs.
         effects (DataFrame): One column of 'risk'/'protective' per module.
-        bpmfile (str): Pickle with the SNP ids for each BPM/WPM.
-        snp2pathwayfile (str): Pickle mapping SNPs to pathways.
-        snp2genefile (str): Pickle mapping SNPs to genes.
         path_ids (dict): Pathway name to its index in the dataset, built by collectresults.
         fdrcutoff (float): FDR threshold, used only to name the output file.
         imported_ssm (bool): True when the network was imported rather than
@@ -126,9 +123,9 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
     bpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
     wpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet")
         
-    gene_pathway_df = np.load(f"{project_dir}/intermediate/gene_pathway_mapping.parquet")
+    gene_pathway_df = pd.read_parquet(f"{project_dir}/intermediate/gene_pathway_mapping.parquet")
         
-    snp_gene_df = np.load(f"{project_dir}/intermediate/snp_gene_mapping.parquet")
+    snp_gene_df = pd.read_parquet(f"{project_dir}/intermediate/snp_gene_mapping.parquet")
         
     # snp_pathway_df = pd.read_parquet(f"{project_dir}/intermediate/snp_pathway_mapping.parquet")
     
@@ -138,7 +135,7 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
     # load ld_file
     ld_sparse_csr = load_npz(f"{project_dir}/raw/plink.ld.r2.npz").tocsr()
     ld_vars_df = pd.read_csv(f"{project_dir}/raw/plink.ld.r2.vars", names=['varid'])
-    assert ld_vars_df.varid.equals(snp_data['varid'])
+    assert np.array_equal(ld_vars_df.varid, snp_data['varid'])
 
     # # pathway indices go up to the same number of SNPs in snp_pathway_mapping.spmatrix data frame
     # # which is less than total SNPs in snp_data, so we need to map the subset of SNPs to the original number of SNPs
@@ -151,9 +148,9 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
 
     # subset the SNP data as well to work with the indices from the snp to pathway mapping matrix
     G = snp_data['data']
-    varid_subset = snp_data.varid
-    chrom_subset = snp_data.chrom
-    pos_subset = snp_data.pos
+    # varid_subset = snp_data['varid']
+    # chrom_subset = snp_data['chrom']
+    # pos_subset = snp_data['pos']
 
     # convert genotype data to dominant and recessive coding with a simple mapping
     dom_map = np.array([0, 1, 1])  # dominant:  0->0, 1->1, 2->1 
@@ -180,7 +177,7 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
     all_genes = snp_gene_df.columns.values
     all_snps = snp_gene_df.index.values
 
-    pheno = np.asarray(snp_data.pheno)
+    pheno = np.asarray(snp_data['pheno'])
     pheno_size = pheno.shape[0]
     res_pheno = np.ones(pheno.shape) - pheno
     pheno_nnz = np.sum(pheno)
@@ -212,7 +209,7 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
 
         if p_id1 == p_id2:
             wpm_flag = True
-            ind1 = wpm_ind[p_id1]
+            ind1 = wpm_ind.iloc[p_id1]
             ind2 = ind1
             rem = 0 if effect == 'protective' else wpm.shape[0]
             path_index.append(p_id1 + rem)
@@ -224,8 +221,8 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
             ind2 = bpm_ind2[bpm_id]
 
         # get snp rsids
-        ind1_snp = varid_subset[ind1].values
-        ind2_snp = varid_subset[ind2].values
+        ind1_snp = snp_data['varid'][ind1]
+        ind2_snp = snp_data['varid'][ind2]
 
         # find all genes for the 2 pathways from the geneset(index)
         tmp = gene_pathway_df[pathname1]
@@ -326,10 +323,10 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
                     snp_pair[:, k] = np.multiply(AD1[:, i[k]], AR2[:, j[k]])
 
             # find base position and chromosome here
-            chr1[k] = chrom_subset.iloc[ind1[i[k]]]
-            chr2[k] = chrom_subset.iloc[ind2[j[k]]]
-            pos1.append(str(pos_subset.iloc[ind1[i[k]]]))
-            pos2.append(str(pos_subset.iloc[ind2[j[k]]]))
+            chr1[k] = snp_data['chrom'][ind1[i[k]]]
+            chr2[k] = snp_data['chrom'][ind2[j[k]]]
+            pos1.append(str(snp_data['pos'][ind1[i[k]]]))
+            pos2.append(str(snp_data['pos'][ind2[j[k]]]))
             if not imported_ssm and chr1[k] == chr2[k]:
                 ld.append(_format_ld(ld_sparse_csr[ind1[i[k]], ind2[j[k]]]))
             else:

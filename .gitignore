@@ -4,6 +4,7 @@
 
 height_analysis/
 build/
+benchmarks/
 testing/
 data/
 data-small**/
