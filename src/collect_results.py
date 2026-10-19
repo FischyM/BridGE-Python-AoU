@@ -79,7 +79,7 @@ def collectresults(project_dir, snp_int_file, model, fdrcut, imported_ssm, densi
     """
     snp_int_file = Path(snp_int_file)
 
-    output_file = f"{project_dir}/results/output-{'-'.join(snp_int_file.stem.split('-')[-2:])}.xlsx"
+    output_file = Path(f"{project_dir}/results/output-{'-'.join(snp_int_file.stem.split('-')[-2:])}.xlsx")
 
     result_file_name = f"results-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
     result_file = snp_int_file.with_name(result_file_name)
@@ -179,7 +179,7 @@ def collectresults(project_dir, snp_int_file, model, fdrcut, imported_ssm, densi
             )
     print(f"    Found {len(BPM_nosig_noRD)} non-redundant BPMs, {len(WPM_nosig_noRD)} non-redundant WPMs, and {len(PATH_nosig_noRD)} non-redundant PATHs below FDR {fdrcut}.")
 
-    pmap.draw_map(project_dir, fdrcut, output_file, BPM_groups, WPM_groups, PATH_groups)
+    pmap.draw_map(project_dir, fdrcut, output_file, BPM_groups, WPM_groups, PATH_groups, fdrBPM['fdrbpm2'])
 
 
     # --- output tables ------------------------------------------------------

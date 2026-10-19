@@ -3,234 +3,195 @@ import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib import rcParams
-from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.font_manager import FontProperties
+from matplotlib.textpath import TextToPath
 
 
-# TODO: redo the refactoring of this file
+LAYOUT_SEED = 0  # fixed so node positions are reproducible across runs
 
-def draw_map(project_dir, fdrcut, output_file, BPM_group_tmp, WPM_group_tmp, PATH_group_tmp, bpm_limit=20):
-    rcParams['font.family'] = 'sans-serif'
+# Pathway key under the network (sizes in inches unless noted).
+FIG_W = 12.0
+KEY_MARGIN = 0.5          # left/right page margin
+KEY_PAD = 0.25            # space above and below the key
+KEY_HEADER_H = 0.3        # 'Pathways' heading
+KEY_COL_GAP_PT = 18       # gap between key columns, points
+KEY_MAX_FONT = 10         # points
+KEY_MIN_FONT_2COL = 6     # below this, fall back to one full-width column
+KEY_LINE_SPACING = 1.4    # line height as a multiple of font size
 
+
+def _key_layout(pathways):
+    """Font size, column count and rows for the key.
+
+    Every entry uses one font size, shrunk from KEY_MAX_FONT until the longest
+    "i: name" fits its column. Two columns by default; one if two would need a
+    font smaller than KEY_MIN_FONT_2COL.
+    """
+    measure = TextToPath()
+    prop = FontProperties(family='sans-serif', size=KEY_MAX_FONT)
+    longest = max(measure.get_text_width_height_descent(f"{i}: {p}", prop, ismath=False)[0]
+                  for i, p in enumerate(pathways))  # points at KEY_MAX_FONT
+    for cols in (2, 1):
+        col_w_pt = (FIG_W - 2 * KEY_MARGIN) * 72 / cols - KEY_COL_GAP_PT
+        font = min(KEY_MAX_FONT, KEY_MAX_FONT * col_w_pt / longest)
+        if font >= KEY_MIN_FONT_2COL or cols == 1:
+            break
+    rows = -(-len(pathways) // cols)
+    return font, cols, rows
+
+
+def _representatives(groups):
+    """Global module index of one module per redundancy group, sorted by group label.
+
+    `groups` is a group-label Series from check_BPM_WPM_redundancy, indexed by
+    global module index and ordered by ascending FDR within each direction, so
+    the first occurrence of each label is the lowest-FDR member of its group.
+    """
+    first = groups[~groups.duplicated()]
+    return pd.Series(first.index, index=first.to_numpy()).sort_index().to_numpy()
+
+
+def _split(i, size):
+    """Global module index -> (row position, effect direction).
+
+    Global indices 0..size-1 are protective and size..2*size-1 are risk.
+    """
+    return (i - size, 'risk') if i >= size else (i, 'protective')
+
+
+def _build_graph(bpm, wpm, BPM_groups, WPM_groups, BPM_fdr, bpm_limit):
+    """Pick the modules to draw and turn them into a pathway graph.
+
+    Returns:
+        tuple[nx.DiGraph, list[str]]: graph with nodes 0..n-1, and the pathway
+            name of each node (sorted alphabetically).
+    """
+    wpm_names = wpm['pathway'].to_numpy()
+    p1_names = bpm['path1names'].to_numpy()
+    p2_names = bpm['path2names'].to_numpy()
+    bpm_size = bpm.shape[0]
+
+    # (pathway1, pathway2, direction); a WPM is a self pair.
+    to_draw = []
+
+    # WPMs: one per redundancy group.
+    for i in _representatives(WPM_groups):
+        pos, direction = _split(i, wpm.shape[0])
+        to_draw.append((wpm_names[pos], wpm_names[pos], direction))
+
+    # # PATHs (kept for future use): one per redundancy group, drawn as a
+    # # node only. Re-enabling also needs PATH_groups passed in here and a
+    # # colour per direction in draw_map.
+    # for i in _representatives(PATH_groups):
+    #     pos, direction = _split(i, wpm.shape[0])
+    #     to_draw.append((wpm_names[pos], None, direction))
+
+    # BPMs touching a WPM pathway take priority, both effect directions.
+    wpm_pathways = np.unique([p for p, _, _ in to_draw])
+    touching = np.flatnonzero(np.isin(p1_names, wpm_pathways) | np.isin(p2_names, wpm_pathways))
+    significant = BPM_groups.index
+    for pos in touching:
+        if pos in significant:
+            to_draw.append((p1_names[pos], p2_names[pos], 'protective'))
+        if pos + bpm_size in significant:
+            to_draw.append((p1_names[pos], p2_names[pos], 'risk'))
+
+    # Then one BPM per redundancy group: the bpm_limit groups whose
+    # representative has the lowest FDR, across both effect directions.
+    # Ties keep group-label order (protective before risk).
+    reps = _representatives(BPM_groups)
+    reps = reps[np.argsort(BPM_fdr.loc[reps].to_numpy(), kind='stable')][:bpm_limit]
+    for i in reps:
+        pos, direction = _split(i, bpm_size)
+        to_draw.append((p1_names[pos], p2_names[pos], direction))
+
+    # Number pathways alphabetically, then collect edges. If the same pathway
+    # pair is drawn more than once, the last entry decides the colour.
+    pathways = sorted({p for p1, p2, _ in to_draw for p in (p1, p2) if p is not None})
+    node = {p: i for i, p in enumerate(pathways)}
+    edge_color = {}
+    for p1, p2, direction in to_draw:
+        if p2 is None:
+            continue
+        key = tuple(sorted((node[p1], node[p2])))
+        edge_color[key] = 'orange' if direction == 'protective' else 'blue'
+
+    G = nx.DiGraph()
+    G.add_nodes_from(range(len(pathways)), color='lightblue')
+    for (i, j), color in sorted(edge_color.items()):
+        G.add_edge(i, j, color=color)
+        G.add_edge(j, i, color=color)
+    return G, pathways
+
+
+def draw_map(project_dir, fdrcut, output_file, BPM_group_tmp, WPM_group_tmp, PATH_group_tmp, BPM_fdr, bpm_limit=20):
+    """Draws the non-redundant pathway map at `fdrcut` to network_map-*.pdf.
+
+    One page: the network (nodes are pathways, edges are BPMs, self loops are
+    WPMs) with a key underneath giving the pathway name for each node number.
+    Nothing is written when fewer than 3 pathways would be drawn.
+
+    The group arguments are the per-threshold lists from
+    check_BPM_WPM_redundancy; only the last entry (exactly fdrcut) is used.
+    PATH_group_tmp is currently unused (see the PATH block in _build_graph).
+    BPM_fdr is a Series of BPM FDRs indexed by global module index (must cover
+    every module in BPM_group_tmp[-1]); it ranks groups for bpm_limit.
+    """
     bpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
     wpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet")
 
-    # Module indices here are row POSITIONS in bpm/wpm, not index labels:
-    # bpm's index can have gaps (pathway pairs dropped upstream), so every
-    # lookup below goes through .iloc. Same convention as _bpm_similar() in
-    # check_BPM_WPM_redundancy.
-    wpm_size = wpm.shape[0]
-    bpm_size = bpm.shape[0]
-
-    # The last entry of each group list is the level at exactly fdrcut, so there
-    # is no threshold index to work out. Protective modules occupy global indices
-    # 0..size-1 and risk modules size..2*size-1.
-    fdr_th = fdrcut
-
-    # Find and add nodes
-    to_draw = []
-    used_pathways = []
-    # add WPMs: exactly one from each redundant group
-    wpm_groups = WPM_group_tmp[-1]
-    for g in np.unique(wpm_groups.to_numpy()):
-        members = wpm_groups.index[wpm_groups == g]
-        xid = members[0]                      # lowest-FDR member of the group
-        risk_type = xid >= wpm_size
-        if risk_type:
-            xid = xid - wpm_size
-        p1 = wpm['pathway'].iloc[xid]
-        used_pathways.append(p1)
-        if risk_type:
-            to_draw.append((p1, p1, 'risk'))
-        else:
-            to_draw.append((p1, p1, 'protective'))
-
-    # # add PATHs
-    # path_groups = PATH_group_tmp[-1]
-    # for g in np.unique(path_groups.to_numpy()):
-    #	members = path_groups.index[path_groups == g]
-    #	xid = members[0]
-    #	risk_type = xid >= wpm_size
-    #	if risk_type:
-    #		xid = xid - wpm_size
-    #	p1 = wpm['pathway'].iloc[xid]
-    #	used_pathways.append(p1)
-    #	if risk_type:
-    #		to_draw.append((p1,None,'risk'))
-    #	else:
-    #		to_draw.append((p1,None,'protective'))
-
-    # add BPMs based on the bpm limit
-    used_pathways = np.unique(used_pathways)
-    bpm_groups = BPM_group_tmp[-1]
-    significant_bpms = bpm_groups.index
-    group_ids = np.unique(bpm_groups.to_numpy())
-    # priority is with WPM-PATH associated pathways
-    # NOTE: x and y are positions in bpm, so bpm_id is always in 0..bpm_size-1 and
-    # this pass can only ever match a protective module. Risk BPMs touching a
-    # WPM/PATH pathway are never drawn here. Fixing that means testing both
-    # bpm_id and bpm_id + bpm_size against significant_bpms, which changes the
-    # figure, so it is left as-is for now.
-    for p in used_pathways:
-        x = np.where(bpm['path1names'] == p)
-        x = x[0]
-        y = np.where(bpm['path2names'] == p)
-        y = y[0]
-        tmp = np.union1d(x,y)
-        for bpm_id in tmp:
-            if bpm_id in significant_bpms:
-                risk_type = False
-                if bpm_id >= bpm_size:
-                    risk_type = True
-                    bpm_id = bpm_id - bpm_size
-                p1 = bpm['path1names'].iloc[bpm_id]
-                p2 = bpm['path2names'].iloc[bpm_id]
-                if risk_type:
-                    to_draw.append((p1, p2, 'risk'))
-                else:
-                    to_draw.append((p1, p2, 'protective'))
-
-    # draw exactly one bpm from each group
-    for g in group_ids[:bpm_limit]:
-        members = bpm_groups.index[bpm_groups == g]
-        xid = members[0]                      # lowest-FDR member of the group
-        risk_type = xid >= bpm_size
-        if risk_type:
-            xid = xid - bpm_size
-        p1 = bpm['path1names'].iloc[xid]
-        p2 = bpm['path2names'].iloc[xid]
-        if risk_type:
-            to_draw.append((p1, p2, 'risk'))
-        else:
-            to_draw.append((p1, p2, 'protective'))
-
-    # Create adjacency matrix
-    # first find all pathways
-    used_pathways = []
-    for t in to_draw:
-        p1 = t[0]
-        p2 = t[1]
-        if p2 != None and p1 != p2:
-            used_pathways.append(p2)
-        used_pathways.append(p1)
-    used_pathways = list(set(used_pathways))
-    inds = {}
-    nodes_labels = {}
-    simple_labels = {}
-    for i in range(len(used_pathways)):
-        p = used_pathways[i]
-        inds[p] = i
-        nodes_labels[i] = p
-        simple_labels[i] = i
-        
-    # now create the matrix
-    adj_matrix = np.zeros((len(used_pathways), len(used_pathways)))
-    path_array = []
-    for t in to_draw:
-        p1 = t[0]
-        p2 = t[1]
-        int_type = t[2]
-        if p2 == None:
-            path_array.append((p1, int_type))
-            continue
-        if p1 == p2:
-            xid = inds[p1]
-            if int_type == 'protective':
-                adj_matrix[xid, xid] = 1
-            else:
-                adj_matrix[xid,xid] = -1
-        else:
-            xid = inds[p1]
-            yid = inds[p2]
-            if int_type == 'protective':
-                adj_matrix[xid, yid] = 1
-                adj_matrix[yid, xid] = 1
-            else:
-                adj_matrix[xid, yid] = -1
-                adj_matrix[yid, xid] = -1
-
-    if adj_matrix.shape[0] < 3:
+    G, pathways = _build_graph(bpm, wpm, BPM_group_tmp[-1], WPM_group_tmp[-1], BPM_fdr, bpm_limit)
+    if len(pathways) < 3:
         return
 
-    # Draw
-    # Graph(map)
-    G = nx.DiGraph()
-    added_node_flag = np.zeros((len(used_pathways), ))
-    
-    # add PATHs with color
-    for t in path_array:
-        p = t[0]
-        int_type = t[1]
-        x_id = inds[p]
-        if added_node_flag[x_id] == 1: # added before!
-            continue
-        if int_type == 'protective':
-            G.add_nodes_from([(x_id, {"color": "lightblue"})])
-        else:
-            G.add_nodes_from([(x_id, {"color": "lightblue"})])
-        added_node_flag[x_id] = 1
+    fig_title = 'Non-redundant network map with FDR threshold=' + str(int(fdrcut*100))
+    key_font, key_cols, key_rows = _key_layout(pathways)
 
-    # add all other the nodes
-    for i in range(len(used_pathways)):
-        if added_node_flag[i] == 0:
-            p = used_pathways[i]
-            G.add_nodes_from([(inds[p], {"color": "lightblue"})])
-            
-    # add BPMs by adding edges
-    for i in range(len(used_pathways)):
-        for j in range(i, len(used_pathways)):
-            val = adj_matrix[i,j]
-            if val == 1:
-                p1 = used_pathways[i]
-                p2 = used_pathways[j]
-                G.add_edge(inds[p1], inds[p2], color='orange')
-                G.add_edge(inds[p2], inds[p1], color='orange')
-            elif val == -1:
-                p1 = used_pathways[i]
-                p2 = used_pathways[j]
-                G.add_edge(inds[p1], inds[p2], color='blue')
-                G.add_edge(inds[p2], inds[p1], color='blue')
-                
-    # drawing 
-    fig_title = 'Non-redundant network map with FDR threshold=' + str(int(fdr_th*100))
-    nodes = G.nodes
-    node_colors = [nodes[u]['color'] for u in nodes]
-    edges = G.edges()
-    colors = [G[u][v]['color'] for u,v in edges]
-    plt.rcParams["figure.autolayout"] = True
-    plt.rcParams["figure.figsize"] = [12, 12]
-    fig1 = plt.figure()
-    pos = nx.spring_layout(G, k=1.5, iterations=200)
-    nx.draw(G, pos, edgelist=edges, edge_color=colors, style='-', node_color=node_colors, nodelist=nodes)
-    nx.draw_networkx_labels(G, pos, labels=simple_labels, font_size=10)
-    plt.axis('off')
-    axis = plt.gca()
-    axis.set_xlim([1.5*x for x in axis.get_xlim()])
-    axis.set_ylim([1.5*y for y in axis.get_ylim()])
-    # add legend
-    legend_elements = [Line2D([0], [0], marker='o', color='w', label='pathway', markerfacecolor='lightblue', markersize=15)]
-    #legend_elements.append(Line2D([0], [0], marker='o', color='w', label='protective PATH pwathway',markerfacecolor='yellow', markersize=15))
-    #legend_elements.append(Line2D([0], [0], marker='o', color='w', label='risk PATH pwathway',markerfacecolor='blue', markersize=15))
-    legend_elements.append(Line2D([0], [0], color='orange', lw=4, label='protective interaction'))
-    legend_elements.append(Line2D([0], [0], color='blue', lw=4, label='risk interaction'))
-    legend_elements.append(Line2D([0], [0], marker='o', color='w', label='self loops indicate WPM interactions',
-                                  markerfacecolor='w', markersize=1))
-    plt.legend(handles=legend_elements, loc='lower left')
+    # Layout in inches: title strip, 12x12 network, then the key underneath.
+    # The key grows with the number of pathways so it never overlaps the network.
+    title_h, net_h = 0.6, 12.0
+    key_line_h = key_font * KEY_LINE_SPACING / 72
+    key_h = 2 * KEY_PAD + KEY_HEADER_H + key_rows * key_line_h
+    fig_h = title_h + net_h + key_h
 
-    # add Pathway names to the next page
-    fig2 = plt.figure()
-    txt = ''
-    for i in range(len(used_pathways)):
-        txt = txt + f"{i}: {nodes_labels[i]}\n"
-    plt.axis('off')
-    fig2.text(0.05, 0.05, txt, size=12)
-    
-    # find output file name based on the ssmfile name
-    net_map_name = f"network_map-{'-'.join(output_file.stem.split('-')[-2:])}.pdf"
-    net_map_file = output_file.with_name(net_map_name)
-    pp = PdfPages(net_map_file)
-    fig_nums = plt.get_fignums()
-    figs = [plt.figure(n) for n in fig_nums]
-    for fig in figs:
-        fig.savefig(pp, format='pdf')
-    pp.close()
+    with plt.rc_context({'font.family': 'sans-serif'}):
+        fig = plt.figure(figsize=(FIG_W, fig_h))
+        fig.suptitle(fig_title, fontsize=16, y=1 - 0.15 / fig_h, va='top')
+
+        # network
+        ax = fig.add_axes([0, key_h / fig_h, 1, net_h / fig_h])
+        edges = list(G.edges())
+        pos = nx.spring_layout(G, k=1.5, iterations=200, seed=LAYOUT_SEED)
+        nx.draw(G, pos, ax=ax, edgelist=edges, edge_color=[G.edges[e]['color'] for e in edges], style='-',
+                nodelist=list(G.nodes), node_color=[c for _, c in G.nodes(data='color')])
+        nx.draw_networkx_labels(G, pos, ax=ax, labels={i: i for i in G.nodes}, font_size=10)
+        ax.axis('off')
+        ax.set_xlim([1.5*x for x in ax.get_xlim()])
+        ax.set_ylim([1.5*y for y in ax.get_ylim()])
+        legend_elements = [
+            Line2D([0], [0], marker='o', color='w', label='pathway', markerfacecolor='lightblue', markersize=15),
+            # Line2D([0], [0], marker='o', color='w', label='protective PATH pwathway', markerfacecolor='yellow', markersize=15),
+            # Line2D([0], [0], marker='o', color='w', label='risk PATH pwathway', markerfacecolor='blue', markersize=15),
+            Line2D([0], [0], color='orange', lw=4, label='protective interaction'),
+            Line2D([0], [0], color='blue', lw=4, label='risk interaction'),
+            Line2D([0], [0], marker='o', color='w', label='self loops indicate WPM interactions',
+                   markerfacecolor='w', markersize=1),
+        ]
+        ax.legend(handles=legend_elements, loc='lower left')
+
+        # key: node number -> pathway name, filled column by column
+        top = key_h - KEY_PAD
+        fig.add_artist(Line2D([KEY_MARGIN / FIG_W, 1 - KEY_MARGIN / FIG_W], [top / fig_h] * 2,
+                              color='0.75', lw=0.8))
+        fig.text(KEY_MARGIN / FIG_W, (top - 0.08) / fig_h, 'Pathways', fontsize=key_font,
+                 fontweight='bold', va='top')
+        col_w = (FIG_W - 2 * KEY_MARGIN) / key_cols
+        for i, p in enumerate(pathways):
+            col, row = divmod(i, key_rows)
+            fig.text((KEY_MARGIN + col * col_w) / FIG_W,
+                     (top - KEY_HEADER_H - row * key_line_h) / fig_h,
+                     f"{i}: {p}", fontsize=key_font, va='top')
+
+        net_map_name = f"network_map-{'-'.join(output_file.stem.split('-')[-2:])}.pdf"
+        fig.savefig(output_file.with_name(net_map_name), format='pdf')
+    plt.close(fig)
