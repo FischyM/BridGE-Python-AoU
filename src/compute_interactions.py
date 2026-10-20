@@ -8,16 +8,15 @@ from scipy.stats import hypergeom
 from scipy.sparse import coo_array, csr_array
 
 
-def run_pheno_perm(seed, cluster_file, pheno, iid):
+def run_pheno_perm(rng, cluster_file, pheno, iid):
     """Permute phenotypes within genetic similarity clusters.
 
     Every cluster keeps its number of cases and controls; only which samples
     in the cluster carry the case label changes.
 
     Args:
-        seed (int): seed for this permutation (e.g. seed * R)
+        rng (numpy.random.Generator): Random number generator
         cluster_file (str): TSV with columns IID, PHENO, CLUSTER
-            ('#' comment lines are ignored)
         pheno (array): 0/1 phenotypes in snp_data.npz row order
         iid (array): sample IDs in snp_data.npz row order
 
@@ -39,7 +38,6 @@ def run_pheno_perm(seed, cluster_file, pheno, iid):
         sys.exit(f"phenotypes in {cluster_file} do not match snp_data.npz")
 
     # shuffle phenotypes among the samples of each cluster
-    rng = np.random.default_rng(seed)
     phenonew = pheno.copy()
     for cl in np.unique(labels):
         ind = np.flatnonzero(labels == cl)
@@ -182,14 +180,15 @@ def run_single(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, s
     population_size = pheno.shape[0]
     # shuffle phenotypes if R != 0
     if R > 0:
+        # single deterministic permutation per R
+        rng = np.random.default_rng(seed * R)
         cluster_file = f"{project_dir}/raw/plink.cluster.tsv"
         if not path.exists(cluster_file):
-            # single deterministic permutation per R
-            rng = np.random.default_rng(seed * R)
             permuted_idx = rng.permutation(population_size)
             pheno = pheno[permuted_idx]
         else:
-            pheno = run_pheno_perm(seed * R, cluster_file, pheno, snp_data['iid'])
+            print("    shuffling phenotypes within genetic similarity clusters...", end="", flush=True)
+            pheno = run_pheno_perm(rng, cluster_file, pheno, snp_data['iid'])
 
     case_size = int(np.count_nonzero(pheno))
     control_size = population_size - case_size

@@ -85,11 +85,11 @@ def convert_plink(pgen_file, pvar_file, psam_file, output_file, compressed=False
     out = {
         "data": G,
         "varid": variant_df.ID.to_numpy().astype(str),
-        "chrom": variant_df['#CHROM'],
-        "pos": variant_df.POS,
-        "pheno": sample_df.PHENO1 - 1,
-        "iid": sample_df.IID,
-        "sex": sample_df.SEX,
+        "chrom": variant_df['#CHROM'].to_numpy().astype(str),
+        "pos": variant_df.POS.to_numpy(),
+        "pheno": sample_df.PHENO1.to_numpy() - 1,
+        "iid": sample_df.IID.to_numpy().astype(str),
+        "sex": sample_df.SEX.to_numpy(),
     }
     (np.savez_compressed if compressed else np.savez)(output_file, allow_pickle=False, **out)
 
@@ -408,7 +408,7 @@ def pathway_indices(project_dir, min_path, n_workers, output_file):
     if n_workers is None:
         n_workers = -1
     rows = Parallel(n_jobs=n_workers)(
-        delayed(_bpm_row)(snp_pathway_np, i) for i in range(len(wpm))
+        delayed(_bpm_row)(snp_pathway_np, i) for i in range(len(pathways))
     )
     BPMind1, BPMind2, ind1size, ind2size = [], [], [], []
     for flat1, flat2, row_ind1size, row_ind2size in rows:  # type: ignore
