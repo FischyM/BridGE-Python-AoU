@@ -47,6 +47,9 @@ set -o pipefail
 #   <outPrefix>.eigenval    eigenvalues of the reference PCA
 #   <outPrefix>.popid.txt   one-hot population membership, same rows
 #   <outPrefix>.pdf         study cohort plotted against the reference panels
+#   <outPrefix>_kde.pdf     the same, with the study cohort drawn as a density
+#   <outPrefix>_hexbin.pdf  the same, with the study cohort as hexbin counts
+#                           (hexagons under 20 samples left blank)
 
 studyPfile=$1
 refPfile=$2
@@ -133,5 +136,3 @@ rm -f "${out}.ref.id" "${out}.study.snps" "${out}.shared.snps" \
       "${out}.ref."{pgen,pvar,psam,log} \
       "${out}.refpca."{acount,eigenval,eigenvec,eigenvec.allele,log} \
       "${out}."{ref,study}"proj."{sscore,log}
-
-echo "population plot written to ${out}.pdf"

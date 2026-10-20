@@ -1,11 +1,17 @@
+import argparse
 import sys
 
+import numpy as np
 import pandas as pd
 import matplotlib
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
+from matplotlib.colors import LogNorm
+from matplotlib.patches import Patch
+from matplotlib.ticker import LogFormatter
+from scipy.ndimage import gaussian_filter
 
 
 # This script plots the study population against multiple 1000 genome project
@@ -24,10 +30,20 @@ from matplotlib import rcParams
 #   legend_pos: legend position, one of southeast, southwest, northeast,
 #       northwest, best.
 #   outfile: output file name. pdf extension will be added.
+#   --min-count: hexagons in the hexbin plot holding fewer than this many
+#       study samples are left blank (default 20, the smallest count the All
+#       of Us dissemination policy allows to be shown). 1 shows every hexagon.
 #
 # OUTPUTS:
-#   A outfile.pdf file showing the scatter plot on the top two population axes.
-#   Different populations are colored differently.
+#   Three views of the same axes, so the most useful one can be picked. All
+#   use the same colors, axis limits and legend position.
+#   outfile.pdf: scatter plot on the top two population axes. Different
+#       populations are colored differently.
+#   outfile_kde.pdf: the study population as a bivariate kernel density
+#       estimate, drawn as shaded contours enclosing 25/50/75/95% of its
+#       samples, with the reference populations kept as scatter points.
+#   outfile_hexbin.pdf: the study population shaded by the number of samples
+#       per hexagon, on a log scale, over the reference population points.
 
 # Example inputs
 # eigenvec_file = 'gwas_subset_prj1000.eigenvec'
@@ -55,12 +71,12 @@ def read_coordinates(path):
         xcol, ycol = 'C1', 'C2'
     else:
         raise SystemExit(
-            'Cannot find PC1/PC2 (or C1/C2) columns in %s, found: %s'
-            % (path, ', '.join(map(str, data.columns)))
+            f'Cannot find PC1/PC2 (or C1/C2) columns in {path}, found: '
+            f'{", ".join(map(str, data.columns))}'
         )
 
     if 'FID' not in data.columns or 'IID' not in data.columns:
-        raise SystemExit('Cannot find FID/IID columns in %s' % path)
+        raise SystemExit(f'Cannot find FID/IID columns in {path}')
 
     return data[['FID', 'IID', xcol, ycol]], xcol, ycol
 
@@ -78,19 +94,216 @@ def read_populations(path):
     expected = len(pop_names) + 2
     if data.shape[1] != expected:
         raise SystemExit(
-            '%s has %d columns, expected %d (FID, IID and %d populations)'
-            % (path, data.shape[1], expected, len(pop_names))
+            f'{path} has {data.shape[1]} columns, expected {expected} '
+            f'(FID, IID and {len(pop_names)} populations)'
         )
     data.columns = ['FID', 'IID'] + pop_names
     return data, pop_names
 
 
+# contours enclosing this fraction of the study samples, outermost first, and
+# the fill opacity of the band inside each one
+KDE_MASS = [0.95, 0.75, 0.50, 0.25]
+KDE_ALPHA = [0.10, 0.20, 0.30, 0.45]
+
+
+def draw_points(ax, data, xcol, ycol, pops, colors):
+    """Scatter each population's samples; returns the artists by population.
+
+    Plot with matplotlib rather than seaborn.scatterplot: with an unfilled
+    marker such as '+', seaborn 0.13 leaves the edge color of a subset of the
+    points at the default, and since '+' is drawn entirely by its edge those
+    points come out black instead of their population color.
+    """
+    artists = {}
+    for pop in pops:
+        subset = data[data['population'] == pop]
+        if subset.empty:
+            continue
+        artists[pop] = ax.scatter(
+            subset[xcol], subset[ycol], marker='+', s=40, linewidths=0.9,
+            color=colors[pop], label=pop,
+            zorder=2 if pop == 'StudyPop' else 3)
+    return artists
+
+
+def drawn_legend_position(ax, legend):
+    """Return (loc, bbox_to_anchor) that reproduce where a drawn legend sits.
+
+    With loc='best' matplotlib picks the spot from the plotted data, so the
+    KDE plot could otherwise put its legend somewhere else. The legend is
+    pinned by its corner nearest the axes corner, so a legend of slightly
+    different size still stays inside the axes.
+    """
+    ax.figure.canvas.draw()
+    box = legend.get_window_extent().transformed(ax.transAxes.inverted())
+    upper, right = box.y0 + box.y1 > 1, box.x0 + box.x1 > 1
+    loc = f'{"upper" if upper else "lower"} {"right" if right else "left"}'
+    return loc, (box.x1 if right else box.x0, box.y1 if upper else box.y0)
+
+
+def draw_kde(ax, points, xlim, ylim, color, bandwidth=0.007, bins=800,
+             n_classes=12):
+    """Shade the density of points as contours; returns a legend handle.
+
+    This is an adaptive-bandwidth KDE (Abramson's square-root law): each
+    sample's kernel sd is bandwidth times the plotted range on each axis,
+    scaled by sqrt(g / f), where f is a fixed-bandwidth pilot density at the
+    sample and g the geometric mean of f over the cohort. Kernels shrink in
+    dense clusters, so contours hug them, and widen for isolated samples,
+    which keeps the sparse cline between clusters from breaking into specks.
+
+    scipy's gaussian_kde is not used: it shapes every kernel after the
+    covariance of the whole cohort, so a cohort split into separate clusters
+    had each sample smeared into a wide tilted ellipse. Here kernels are
+    axis-aligned and evaluated by blurring 2-D histograms, which keeps it fast
+    on a large cohort without subsampling. Samples are grouped into
+    n_classes log-spaced bandwidth classes, one blur per class.
+
+    Contour levels are the density quantiles at the samples themselves, so
+    each shaded region encloses a fixed share of the cohort.
+    """
+    # extend the grid past the plotted range so the outer contours close
+    # instead of stopping at the edge
+    xpad, ypad = 0.2 * (xlim[1] - xlim[0]), 0.2 * (ylim[1] - ylim[0])
+    xedges = np.linspace(xlim[0] - xpad, xlim[1] + xpad, bins + 1)
+    yedges = np.linspace(ylim[0] - ypad, ylim[1] + ypad, bins + 1)
+    sigma = np.array([bandwidth * (xlim[1] - xlim[0]) / (xedges[1] - xedges[0]),
+                      bandwidth * (ylim[1] - ylim[0]) / (yedges[1] - yedges[0])])
+    xi = np.clip(np.searchsorted(xedges, points[:, 0], side='right') - 1,
+                 0, bins - 1)
+    yi = np.clip(np.searchsorted(yedges, points[:, 1], side='right') - 1,
+                 0, bins - 1)
+
+    def blurred(subset, scale):
+        counts, _, _ = np.histogram2d(points[subset, 0], points[subset, 1],
+                                      bins=[xedges, yedges])
+        # mode='constant' so mass near the grid edge is not reflected back in
+        return gaussian_filter(counts, sigma=sigma * scale, mode='constant').T
+
+    everyone = np.ones(len(points), dtype=bool)
+    pilot = blurred(everyone, 1.0)[yi, xi]
+    # every sample adds mass to its own bin, so the pilot is positive there
+    scale = np.sqrt(np.exp(np.log(pilot).mean()) / pilot)
+
+    density = np.zeros((bins, bins))
+    edges = np.geomspace(scale.min(), scale.max() * (1 + 1e-9), n_classes + 1)
+    member = np.clip(np.searchsorted(edges, scale, side='right') - 1,
+                     0, n_classes - 1)
+    for c in np.unique(member):
+        subset = member == c
+        density += blurred(subset, np.exp(np.log(scale[subset]).mean()))
+
+    levels = np.quantile(density[yi, xi], [1 - m for m in KDE_MASS])
+    # a tight cluster can tie neighboring quantiles, and contour levels must
+    # be strictly increasing
+    levels, keep = np.unique(levels, return_index=True)
+    alphas = [KDE_ALPHA[i] for i in keep]
+
+    xcenters = (xedges[:-1] + xedges[1:]) / 2
+    ycenters = (yedges[:-1] + yedges[1:]) / 2
+    ax.contourf(xcenters, ycenters, density,
+                levels=np.append(levels, density.max() * 1.01),
+                colors=[(*color, a) for a in alphas], zorder=1)
+    ax.contour(xcenters, ycenters, density, levels=levels, colors=[color],
+               linewidths=0.8, zorder=1)
+    return Patch(facecolor=(*color, KDE_ALPHA[-1]), edgecolor=color,
+                 label='StudyPop')
+
+
+def draw_hexbin(ax, points, xlim, ylim, min_count=20, gridsize=60, alpha=0.6):
+    """Shade the number of points per hexagon on a log scale.
+
+    Hexagons holding fewer than min_count points are left blank. They are
+    drawn over the reference points, at the given opacity so those points
+    still show through. Returns a legend handle, or None if no hexagon
+    reaches min_count.
+    """
+    cmap = plt.get_cmap('Blues')
+    # rasterized: matplotlib 3.11's PDF backend misplaces hexagons left of or
+    # below the data origin, so they fall outside the axes and are clipped away
+    hb = ax.hexbin(points[:, 0], points[:, 1], gridsize=gridsize,
+                   extent=(*xlim, *ylim), norm=LogNorm(), mincnt=1, cmap=cmap,
+                   alpha=alpha, zorder=4, rasterized=True)
+
+    # drop small hexagons here rather than through hexbin's mincnt, which
+    # keeps counts > mincnt before matplotlib 3.8 but >= mincnt after it
+    counts = np.asarray(hb.get_array())
+    keep = counts >= min_count
+    if not keep.any():
+        hb.remove()
+        print(f'Hexbin empty: no hexagon holds {min_count} or more study '
+              'samples', file=sys.stderr)
+        return None
+    hb.set_offsets(hb.get_offsets()[keep])
+    hb.set_array(counts[keep])
+    # start the color scale at the threshold so the lightest shade means
+    # min_count; the upper limit must differ from it for the log scale
+    hb.set_clim(max(min_count, 1), max(counts[keep].max(), min_count + 1))
+
+    cbar = ax.figure.colorbar(hb, ax=ax, label='StudyPop samples per hexagon')
+    # plain counts (20, 30) rather than 2x10^1, 3x10^1; LogFormatter still
+    # thins out the minor-tick labels when the range spans several decades
+    cbar.ax.yaxis.set_major_formatter(LogFormatter())
+    cbar.ax.yaxis.set_minor_formatter(LogFormatter(labelOnlyBase=False))
+    return Patch(facecolor=cmap(0.7), alpha=alpha, label='StudyPop')
+
+
+def plot_density(data, xcol, ycol, plot_order, colors, xlim, ylim,
+                 legend_pos, path, hexbin=False, min_count=20):
+    """Plot the study cohort as a KDE (or hexbin counts), with reference
+    samples as points."""
+    fig, ax = plt.subplots()
+    artists = draw_points(ax, data, xcol, ycol,
+                          [p for p in plot_order if p != 'StudyPop'], colors)
+
+    points = data.loc[data['population'] == 'StudyPop', [xcol, ycol]].to_numpy()
+    if len(points) < 3:
+        print(f'Density skipped: only {len(points)} study samples',
+              file=sys.stderr)
+    elif hexbin:
+        handle = draw_hexbin(ax, points, xlim, ylim, min_count)
+        if handle is not None:
+            artists['StudyPop'] = handle
+        ax.set_title(f'StudyPop sample counts (hexagons with {min_count} '
+                     'or more)')
+    else:
+        artists['StudyPop'] = draw_kde(ax, points, xlim, ylim,
+                                       colors['StudyPop'])
+        masses = '/'.join(str(round(m * 100)) for m in reversed(KDE_MASS))
+        ax.set_title(f'StudyPop density (contours enclose {masses}% of '
+                     'samples)')
+
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.set_xlabel(xcol)
+    ax.set_ylabel(ycol)
+    ax.grid(zorder=0)
+    ax.set_axisbelow(True)
+    loc, anchor = legend_pos
+    ax.legend(handles=[artists[p] for p in plot_order if p in artists],
+              loc=loc, bbox_to_anchor=anchor, fontsize='small')
+    fig.savefig(path, bbox_inches='tight')
+    plt.close(fig)
+
+
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Plot the study population against 1000 Genomes '
+                    'reference populations on the top two population axes.')
+    parser.add_argument('eigenvec_file')
+    parser.add_argument('pop_id_file')
+    parser.add_argument('legend_pos', help=', '.join(LEGEND_LOC))
+    parser.add_argument('outfile', help='output prefix; .pdf is added')
+    parser.add_argument('--min-count', type=int, default=20,
+                        help='in the hexbin plot, leave hexagons holding '
+                             'fewer study samples than this blank '
+                             '(default 20)')
+    args = parser.parse_args()
+    eigenvec_file, pop_id_file = args.eigenvec_file, args.pop_id_file
+    legend_pos, outfile = args.legend_pos, args.outfile
+
     rcParams['font.family'] = 'sans-serif'
-    eigenvec_file = sys.argv[1]
-    pop_id_file = sys.argv[2]
-    legend_pos = sys.argv[3] if len(sys.argv) > 3 else 'southeast'
-    outfile = sys.argv[4]
 
     coords, xcol, ycol = read_coordinates(eigenvec_file)
     pop_id_data, pop_names = read_populations(pop_id_file)
@@ -104,7 +317,7 @@ if __name__ == '__main__':
     data = coords.merge(pop_id_data, how='inner', on=['FID', 'IID'])
     if data.empty:
         raise SystemExit(
-            'No samples in common between %s and %s' % (eigenvec_file, pop_id_file)
+            f'No samples in common between {eigenvec_file} and {pop_id_file}'
         )
 
     data['population'] = (data[pop_names] == 1).idxmax(axis=1)
@@ -115,27 +328,27 @@ if __name__ == '__main__':
     other_points = data[data['population'] != 'StudyPop']
     plot_order = ['StudyPop'] + [p for p in sorted(pop_names) if p != 'StudyPop']
 
-    # Plot with matplotlib rather than seaborn.scatterplot: with an unfilled
-    # marker such as '+', seaborn 0.13 leaves the edge color of a subset of the
-    # points at the default, and since '+' is drawn entirely by its edge those
-    # points come out black instead of their population color.
-    fig, ax = plt.subplots()
-    colors = plt.get_cmap('tab10').colors
-    for i, pop in enumerate(plot_order):
-        subset = data[data['population'] == pop]
-        if subset.empty:
-            continue
-        ax.scatter(subset[xcol], subset[ycol], marker='+', s=40,
-                   linewidths=0.9, color=colors[i % len(colors)], label=pop,
-                   zorder=2 if pop == 'StudyPop' else 3)
+    tab10 = plt.get_cmap('tab10').colors
+    colors = {pop: tab10[i % len(tab10)] for i, pop in enumerate(plot_order)}
 
+    fig, ax = plt.subplots()
+    draw_points(ax, data, xcol, ycol, plot_order, colors)
     ax.set_title('Population plot colored by population')
     ax.set_xlabel(xcol)
     ax.set_ylabel(ycol)
     ax.grid(zorder=0)
-    ax.legend(loc=LEGEND_LOC.get(legend_pos, 'best'), fontsize='small')
-    fig.savefig(outfile + '.pdf', bbox_inches='tight')
+    legend = ax.legend(loc=LEGEND_LOC.get(legend_pos, 'best'), fontsize='small')
+    # the density plots reuse these axis limits and the legend's drawn position
+    # so all three plots line up
+    density_legend_pos = drawn_legend_position(ax, legend)
+    xlim, ylim = ax.get_xlim(), ax.get_ylim()
+    fig.savefig(outfile + '_scatter.pdf', bbox_inches='tight')
     plt.close(fig)
 
-    print('%s samples plotted (%s study, %s reference)'
-          % (len(data), len(study_points), len(other_points)))
+    for hexbin, suffix in ((False, '_kde'), (True, '_hexbin')):
+        plot_density(data, xcol, ycol, plot_order, colors, xlim, ylim,
+                     density_legend_pos, outfile + suffix + '.pdf',
+                     hexbin=hexbin, min_count=args.min_count)
+
+    print(f'{len(data)} samples plotted ({len(study_points)} study, {len(other_points)} reference)')
+    print(f'population plots written to...\n\t{outfile}_scatter.pdf\n\t{outfile}_kde.pdf\n\t{outfile}_hexbin.pdf')
