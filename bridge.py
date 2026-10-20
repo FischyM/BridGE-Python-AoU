@@ -101,9 +101,7 @@ def run_data_process(args):
 
 def run_compute_interaction(args):
     print("Computing SNP-SNP Interactions")
-    
-    # TODO: fix plink1 cluster file use for phenotype permutation
-    
+
     # setup memory tracking
     def get_used_mem():
         return psutil.virtual_memory().total - psutil.virtual_memory().available

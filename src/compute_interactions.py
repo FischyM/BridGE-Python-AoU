@@ -1,14 +1,51 @@
-import functools
-import math
+import functools, math, sys
 from datetime import datetime
 from os import path
 
 import numpy as np
+import pandas as pd
 from scipy.stats import hypergeom
 from scipy.sparse import coo_array, csr_array
 
-from src import withinclassrand as wrand
 
+def run_pheno_perm(seed, cluster_file, pheno, iid):
+    """Permute phenotypes within genetic similarity clusters.
+
+    Every cluster keeps its number of cases and controls; only which samples
+    in the cluster carry the case label changes.
+
+    Args:
+        seed (int): seed for this permutation (e.g. seed * R)
+        cluster_file (str): TSV with columns IID, PHENO, CLUSTER
+            ('#' comment lines are ignored)
+        pheno (array): 0/1 phenotypes in snp_data.npz row order
+        iid (array): sample IDs in snp_data.npz row order
+
+    Returns:
+        phenonew (np.ndarray): permuted phenotypes, same order as `pheno`
+    """
+    # load cluster file
+    cluster_data = pd.read_csv(cluster_file, sep=r"\s+", comment="#", dtype={'IID': str})
+    if not cluster_data['IID'].is_unique:
+        sys.exit(f"duplicate IIDs in {cluster_file}")
+
+    # align cluster file rows to the snp_data order: row i of the result is sample iid[i]
+    idx = pd.Index(cluster_data['IID']).get_indexer(iid)
+    if (idx < 0).any():
+        sys.exit(f"{(idx < 0).sum()} sample(s) in snp_data.npz absent from {cluster_file}, "
+                 f"e.g. {iid[idx < 0][0]}")
+    labels = cluster_data['CLUSTER'].to_numpy()[idx]
+    if not np.array_equal(cluster_data['PHENO'].to_numpy()[idx], pheno):
+        sys.exit(f"phenotypes in {cluster_file} do not match snp_data.npz")
+
+    # shuffle phenotypes among the samples of each cluster
+    rng = np.random.default_rng(seed)
+    phenonew = pheno.copy()
+    for cl in np.unique(labels):
+        ind = np.flatnonzero(labels == cl)
+        phenonew[ind] = pheno[rng.permutation(ind)]
+
+    return phenonew
 
 # @functools.lru_cache(maxsize=2_000_000)
 @functools.cache
@@ -145,15 +182,14 @@ def run_single(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, s
     population_size = pheno.shape[0]
     # shuffle phenotypes if R != 0
     if R > 0:
-        cluster_file = f"{project_dir}/intermediate/PlinkFile.cluster2"
+        cluster_file = f"{project_dir}/raw/plink.cluster.tsv"
         if not path.exists(cluster_file):
             # single deterministic permutation per R
             rng = np.random.default_rng(seed * R)
             permuted_idx = rng.permutation(population_size)
             pheno = pheno[permuted_idx]
         else:
-            # TODO: this will fail and needs to be fixed if we ever want to run R > 0 with a cluster file
-            pheno = wrand.withinclassrand(seed * R, cluster_file, f"{project_dir}/intermediate/SNPdataAD.pkl")
+            pheno = run_pheno_perm(seed * R, cluster_file, pheno, snp_data['iid'])
 
     case_size = int(np.count_nonzero(pheno))
     control_size = population_size - case_size

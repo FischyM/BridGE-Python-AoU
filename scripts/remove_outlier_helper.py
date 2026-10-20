@@ -1,14 +1,3 @@
-"""Keep the samples that fall inside a rectangle on the top two population axes.
-
-Reads the coordinates written by example-check_population.sh (a PLINK2
-.eigenvec: '#FID IID PC1 PC2 ...') and writes a PLINK2 --keep ID file. A legacy
-PLINK 1.9 --mds-plot file ('FID IID SOL C1 C2') is also accepted, in which case
-C1/C2 are used.
-
-Bounds are inclusive and each one is optional, so a single axis can be filtered
-on its own. Read the cutoffs off the plot produced by the population check.
-"""
-
 import argparse
 import sys
 
@@ -70,6 +59,16 @@ def parse_args():
 
 
 def main():
+    """Keep the samples that fall inside a rectangle on the top two population axes.
+
+    Reads the coordinates written by example-check_population.sh (a PLINK2
+    .eigenvec: '#FID IID PC1 PC2 ...') and writes a PLINK2 --keep ID file. A legacy
+    PLINK 1.9 --mds-plot file ('FID IID SOL C1 C2') is also accepted, in which case
+    C1/C2 are used.
+
+    Bounds are inclusive and each one is optional, so a single axis can be filtered
+    on its own. Read the cutoffs off the plot produced by the population check.
+    """
     args = parse_args()
     if args.x1 > args.x2 or args.y1 > args.y2:
         sys.exit("Empty selection: x1 must be <= x2 and y1 must be <= y2")

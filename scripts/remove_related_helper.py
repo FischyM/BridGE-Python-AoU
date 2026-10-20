@@ -1,19 +1,3 @@
-"""Select a near-maximal unrelated sample set, preferring to retain cases.
-
-Input is a PLINK2 `--make-king-table --king-table-filter <cutoff>` .kin0 file,
-which lists only the pairs at or above the kinship cutoff. Those pairs form a
-graph; the goal is a large independent set. Finding the true maximum is
-NP-hard, so this uses the standard greedy heuristic (repeatedly delete the
-highest-degree vertex) with one modification: controls are deleted before
-cases.
-
-Consequence worth understanding: prioritising cases can cost total sample size.
-If a control sits between two cases in the relatedness graph, dropping that one
-control saves two cases, which is a good trade. But when a high-degree case is
-connected only to controls, this rule deletes all of those controls to keep the
-single case. The --max-controls-per-case guard caps that behaviour.
-"""
-
 import argparse
 from collections import defaultdict
 
@@ -89,6 +73,21 @@ def priority(node, adj, pheno, max_controls_per_case):
     return (rank, -degree, node)
 
 def main():
+    """Select a near-maximal unrelated sample set, preferring to retain cases.
+
+    Input is a PLINK2 `--make-king-table --king-table-filter <cutoff>` .kin0 file,
+    which lists only the pairs at or above the kinship cutoff. Those pairs form a
+    graph; the goal is a large independent set. Finding the true maximum is
+    NP-hard, so this uses the standard greedy heuristic (repeatedly delete the
+    highest-degree vertex) with one modification: controls are deleted before
+    cases.
+
+    Consequence worth understanding: prioritising cases can cost total sample size.
+    If a control sits between two cases in the relatedness graph, dropping that one
+    control saves two cases, which is a good trade. But when a high-degree case is
+    connected only to controls, this rule deletes all of those controls to keep the
+    single case. The --max-controls-per-case guard caps that behaviour.
+    """
     args = parse_args()
 
     samples, pheno, psam_has_fid = read_psam(args.psam, args.pheno_col)
