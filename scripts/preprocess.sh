@@ -43,56 +43,55 @@ ratio=1             # number of controls to match to each case eg., <ratio>:1
 
 
 
-# # basic QC
-# plink2 --pfile "${plink_file}" \
-#     --autosome --snps-only just-acgt --exclude-palindromic-snps \
-#     --mind ${mind} --geno ${geno} --hwe ${hwe_p} ${hwe_k} midp keep-fewhet --maf ${maf} \
-#     --sort-vars --make-pgen --out "${plink_file}.step1.basicQC" --silent
+# basic QC
+plink2 --pfile "${plink_file}" \
+    --autosome --snps-only just-acgt --exclude-palindromic-snps \
+    --mind ${mind} --geno ${geno} --hwe ${hwe_p} ${hwe_k} midp keep-fewhet --maf ${maf} \
+    --sort-vars --make-pgen --out "${plink_file}.step1.basicQC" --silent
 
 
-# # get a less redundant set of SNPs using LD pruning
-# plink2 --pfile "${plink_file}.step1.basicQC" \
-#     --indep-pairwise ${ld_window} ${ld_step} ${ld_r2} \
-#     --out "${plink_file}.step2.LD" --silent
+# get a less redundant set of SNPs using LD pruning
+plink2 --pfile "${plink_file}.step1.basicQC" \
+    --indep-pairwise ${ld_window} ${ld_step} ${ld_r2} \
+    --out "${plink_file}.step2.LD" --silent
 
-# plink2 --pfile "${plink_file}.step1.basicQC" \
-#     --extract "${plink_file}.step2.LD.prune.in" \
-#     --make-pgen --out "${plink_file}.step2.pruned" --silent
-
-
-# # filtering out related samples
-# plink2 --pfile "${plink_file}.step2.pruned" \
-#     --make-king-table --king-table-filter ${king_filter} \
-#     --out "${plink_file}.step3.king" --silent
-
-# python -m remove_related_helper \
-#     --kin0 "${plink_file}.step3.king.kin0" \
-#     --psam "${plink_file}.step2.pruned.psam" \
-#     --out "${plink_file}.step3.unrelated.id" \
-#     --removed "${plink_file}.step3.related.id"
-
-# plink2 --pfile "${plink_file}.step2.pruned" \
-#     --keep "${plink_file}.step3.unrelated.id" \
-#     --make-pgen --out "${plink_file}.step3.unrelated" --silent
+plink2 --pfile "${plink_file}.step1.basicQC" \
+    --extract "${plink_file}.step2.LD.prune.in" \
+    --make-pgen --out "${plink_file}.step2.pruned" --silent
 
 
-# # match cases to controls
-# plink2 --pfile "${plink_file}.step3.unrelated" \
-#     --pca ${npcs} \
-#     --out "${plink_file}.step4.pca" --silent
+# filtering out related samples
+plink2 --pfile "${plink_file}.step2.pruned" \
+    --make-king-table --king-table-filter ${king_filter} \
+    --out "${plink_file}.step3.king" --silent
 
-# python -m match_case_control_helper \
-#     --eigenvec "${plink_file}.step4.pca.eigenvec" \
-#     --eigenval "${plink_file}.step4.pca.eigenval" \
-#     --psam "${plink_file}.step3.unrelated.psam" \
-#     --weight-eigenvalues --npcs ${npcs} --ratio ${ratio} \
-#     --out "${plink_file}.step4.matched.id" \
-#     --pairs "${plink_file}.step4.matched.pairs.tsv"
+python -m remove_related_helper \
+    --kin0 "${plink_file}.step3.king.kin0" \
+    --psam "${plink_file}.step2.pruned.psam" \
+    --out "${plink_file}.step3.unrelated.id" \
+    --removed "${plink_file}.step3.related.id"
+
+plink2 --pfile "${plink_file}.step2.pruned" \
+    --keep "${plink_file}.step3.unrelated.id" \
+    --make-pgen --out "${plink_file}.step3.unrelated" --silent
+
+
+# match cases to controls
+plink2 --pfile "${plink_file}.step3.unrelated" \
+    --pca ${npcs} \
+    --out "${plink_file}.step4.pca" --silent
+
+python -m match_case_control_helper \
+    --eigenvec "${plink_file}.step4.pca.eigenvec" \
+    --eigenval "${plink_file}.step4.pca.eigenval" \
+    --psam "${plink_file}.step3.unrelated.psam" \
+    --weight-eigenvalues --npcs ${npcs} --ratio ${ratio} \
+    --out "${plink_file}.step4.matched.id" \
+    --pairs "${plink_file}.step4.matched.pairs.tsv"
     
-# plink2 --pfile "${plink_file}.step3.unrelated" \
-#     --keep "${plink_file}.step4.matched.id" \
-#     --make-pgen --out "${plink_file}.step4.matched" --silent
-
+plink2 --pfile "${plink_file}.step3.unrelated" \
+    --keep "${plink_file}.step4.matched.id" \
+    --make-pgen --out "${plink_file}.step4.matched" --silent
 
 
 # ---------------------------------------------------------------------------
