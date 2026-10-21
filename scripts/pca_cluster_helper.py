@@ -1,9 +1,43 @@
+"""Cluster samples into genetic similarity groups for within-cluster phenotype
+permutation (used by BridGE ComputeInteraction for R > 0).
+
+Reads a PLINK2 `--pca` .eigenvec/.eigenval pair and the matching .psam, then:
+
+1. z-scores each PC and weights it by sqrt(eigenvalue_i / eigenvalue_1), the
+    same scaling as match_case_control_helper.py --weight-eigenvalues.
+2. Runs k-means for every k on the odd geometric grid 3, 5, 9, 17, 33, ...
+    (2^i + 1) below a limit, plus a final k equal to the limit (minus 1 if it
+    is even). With n <= 10,000 samples the limit is n. With n > 10,000 it is
+    --kmax, or 10,000 if --kmax is not given (never more than n).
+3. At every k, merges each invalid cluster as a whole into the valid cluster
+    with the nearest centroid. A cluster is valid if it contains at least one
+    case and at least one control (so single-sample clusters are invalid). If no
+    cluster at that k is valid, all samples form one cluster.
+4. Keeps the k with the MOST clusters after merging (ties go to the smaller k).
+    The per-k log shows how many clusters were merged and the cluster count
+    after merging. k is scanned in increasing order and the scan stops once
+    --patience consecutive k values have all failed to exceed the best cluster
+    count so far (a tie counts as not exceeding), so the most expensive k values
+    (close to n) can be skipped when the peak comes early enough.
+
+Parallelism: at each k the n_init k-means restarts are independent
+single-threaded tasks spread over --workers processes, so at most n_init
+workers are busy at once. For each k the restart with the lowest inertia is
+kept, as sklearn does internally for n_init > 1. Restart seeds come from
+SeedSequence(seed, spawn_key=(k, restart)), so the result does not depend on
+--workers.
+
+Output: a TSV with columns IID, PHENO (0 = control, 1 = case, matching
+snp_data.npz), CLUSTER, preceded by a '#' comment line recording the settings.
+"""
+    
 import argparse
 import sys
 from pathlib import Path
 
 import numpy as np
 from joblib import Parallel, delayed
+from scipy.spatial import KDTree
 from sklearn.cluster import KMeans
 from threadpoolctl import threadpool_limits
 
@@ -16,9 +50,11 @@ def parse_args():
     p.add_argument("--psam", required=True, help="PLINK2 .psam file (phenotypes)")
     p.add_argument("--out", required=True, help="output cluster TSV, written to the same directory as what is given but called 'plink.cluster.tsv'")
     p.add_argument("--npcs", type=int, default=10, help="number of leading PCs to cluster on (default: 10)")
-    p.add_argument("--kmax", type=int, default=255, help="largest k on the 3, 5, 9, 17, ... grid (default: 255)")
     p.add_argument("--n-init", type=int, default=10, help="k-means restarts per k (default: 10)")
-    p.add_argument("--workers", type=int, default=1, help="parallel processes (default: 1)")
+    p.add_argument("--kmax", type=int, default=None, help="largest k to test when there are more than "
+                   "10,000 samples (default: 10,000; ignored at 10,000 samples or fewer, where the grid goes up to n)")
+    p.add_argument("--patience", type=int, default=2, help="stop after this many consecutive k fail to exceed the best cluster count so far (default: 2)")
+    p.add_argument("--workers", type=int, default=None, help="parallel processes (default: None, which uses all available cores)")
     p.add_argument("--seed", type=int, default=42, help="random seed (default: 42)")
     p.add_argument("--pheno-col", default=None, help="phenotype column in .psam (default: PHENO1)")
     return p.parse_args()
@@ -58,85 +94,107 @@ def kmeans_once(X, k, seed, restart):
         km = KMeans(n_clusters=k, n_init=1, random_state=rs).fit(X)
     return k, restart, km.inertia_, km.labels_.astype(np.int64)
 
-def cluster_samples(X, pheno, kmax, n_init, workers, seed):
-    """Returns (labels, k, merged)."""
+def merge_invalid(X, labels, pheno):
+    """Merge every invalid cluster (single sample, or only one phenotype) as a whole
+    into the valid cluster with the nearest centroid. Centroids are those of the
+    valid clusters before merging, so the order of merges does not matter.
+
+    Returns (labels relabelled to 0..m-1, n_invalid_clusters, n_samples_moved).
+    If no cluster is valid, every sample is put in one cluster.
+    """
+    ok = valid_clusters(labels, pheno)
+    n_bad = int((~ok).sum())
+    if n_bad == 0:
+        return labels, 0, 0
+    if not ok.any():
+        return np.zeros_like(labels), n_bad, labels.size
+
+    valid_ids = np.flatnonzero(ok)
+    bad_ids = np.flatnonzero(~ok)
+    n_clusters = labels.max() + 1
+    counts = np.bincount(labels, minlength=n_clusters)
+    sums = np.zeros((n_clusters, X.shape[1]))
+    np.add.at(sums, labels, X)
+    centroids = sums / np.maximum(counts, 1)[:, None]
+
+    # nearest valid centroid for each invalid cluster's centroid (KD-tree: memory is
+    # linear in the number of clusters, unlike a full invalid x valid distance matrix)
+    _, nearest = KDTree(centroids[valid_ids]).query(centroids[bad_ids], k=1)
+    target = np.arange(n_clusters)
+    target[bad_ids] = valid_ids[nearest]
+
+    merged = target[labels]
+    merged = np.unique(merged, return_inverse=True)[1]  # relabel to 0..m-1
+    return merged, n_bad, int(counts[bad_ids].sum())
+
+LARGE_N = 10_000  # above this many samples the grid stops at kmax instead of n
+
+def get_kmax(n, kmax=None):
+    """Largest (odd) k to test.
+
+    n <= 10,000: k goes up to n, and any user kmax is ignored.
+    n >  10,000: k goes up to the user's kmax, or 10,000 if none was given (never above n).
+    The limit is reduced by one if it is even, so every k on the grid is odd.
+    """
+    if n <= LARGE_N:
+        if kmax is not None:
+            print(f"    note: --kmax ignored, {n} samples <= {LARGE_N}; testing k up to n", flush=True)
+        limit = n
+    else:
+        limit = min(LARGE_N if kmax is None else kmax, n)
+    limit = limit if limit % 2 == 1 else limit - 1
+    if limit < 3:
+        sys.exit(f"the largest k to test must be at least 3 (got {limit} from n={n}, --kmax={kmax})")
+    return limit
+
+def cluster_samples(X, pheno, n_init, workers, seed, patience=2, kmax=None):
+    """Returns (labels, k, n_bad, n_moved) for the chosen k."""
     n = X.shape[0]
+    kmax = get_kmax(n, kmax)
     grid = []
     i = 1
-    while 2**i + 1 <= min(kmax, n):
+    while 2**i + 1 <= kmax:
         grid.append(2**i + 1)
         i += 1
     if kmax not in grid:
         grid.append(kmax)
-    if len(grid) == 0:
-        sys.exit(f"--kmax {kmax} is below the smallest grid value (3) or the sample size ({n})")
+    print(f"    k grid (up to {kmax}): {', '.join(map(str, grid))}", flush=True)
 
-    # largest k first so the slowest tasks start early (better load balancing)
-    tasks = [(k, r) for k in reversed(grid) for r in range(n_init)]
-    results = Parallel(n_jobs=workers)(delayed(kmeans_once)(X, k, seed, r) for k, r in tasks)
+    # Scan k in increasing order. At each k the n_init restarts run in parallel, the
+    # lowest-inertia restart is kept (ties -> lowest restart index), invalid clusters
+    # are merged, and the k with the most clusters after merging is kept (ties ->
+    # smaller k). The scan stops early once `patience` consecutive k values have all
+    # failed to exceed the best count so far (ties count as not exceeding), which
+    # skips the costly k ~ n tail.
+    chosen = None
+    n_worse = 0
+    with Parallel(n_jobs=workers) as parallel:  # reuse the same worker processes for every k
+        for k in grid:
+            results = parallel(delayed(kmeans_once)(X, k, seed, r) for r in range(n_init))
+            _, _, _, best_labels = min(results, key=lambda res: (res[2], res[1]))
 
-    # per k keep the lowest-inertia restart (ties -> lowest restart index)
-    best = {}
-    for k, r, inertia, labels in results:
-        if k not in best or (inertia, r) < (best[k][0], best[k][1]):
-            best[k] = (inertia, r, labels)
+            labels, n_bad, n_moved = merge_invalid(X, best_labels, pheno)
+            n_after = labels.max() + 1
+            print(f"    k={k}: {n_bad} invalid cluster(s) merged ({n_moved} samples moved) "
+                  f"-> {n_after} clusters", flush=True)
 
-    chosen_k = None
-    for k in grid:
-        ok = valid_clusters(best[k][2], pheno)
-        print(f"    k={k}: {ok.sum()}/{k} clusters valid", flush=True)
-        if ok.all():
-            chosen_k = k
-    if chosen_k is not None:
-        return best[chosen_k][2], chosen_k, False
+            if chosen is None or n_after > chosen[0]:
+                chosen = (n_after, k, labels, n_bad, n_moved)
+                n_worse = 0
+            else:
+                n_worse += 1
+                if n_worse >= patience and k != grid[-1]:
+                    print(f"    stopping: {patience} consecutive k did not exceed the "
+                          f"best cluster count so far (k={chosen[1]})", flush=True)
+                    break
 
-    # fallback: no k on the grid is valid -> use k = 3 and merge invalid clusters
-    k = grid[0]
-    labels = best[k][2].copy()
-    ok = valid_clusters(labels, pheno)
-    if not ok.any():
-        print("WARNING: no valid cluster at any k; using a single cluster "
+    n_after, k, labels, n_bad, n_moved = chosen
+    if n_after == 1:
+        print("WARNING: no k produced more than one valid cluster; using a single cluster "
               "(equivalent to a global phenotype permutation)", flush=True)
-        return np.zeros(n, dtype=np.int64), 1, True
-
-    print(f"WARNING: no k on the grid gave all-valid clusters; using k={k} and "
-          f"reassigning members of {(~ok).sum()} invalid cluster(s) to the nearest "
-          f"valid cluster centroid", flush=True)
-    valid_ids = np.flatnonzero(ok)
-    centroids = np.vstack([X[labels == c].mean(axis=0) for c in valid_ids])
-    bad = ~ok[labels]
-    dists = ((X[bad, None, :] - centroids[None, :, :]) ** 2).sum(axis=2)
-    labels[bad] = valid_ids[dists.argmin(axis=1)]
-    labels = np.unique(labels, return_inverse=True)[1]  # relabel to 0..m-1
-    return labels, k, True
+    return labels, k, n_bad, n_moved
 
 def main():
-    """Cluster samples into genetic similarity groups for within-cluster phenotype
-    permutation (used by BridGE ComputeInteraction for R > 0).
-
-    Reads a PLINK2 `--pca` .eigenvec/.eigenval pair and the matching .psam, then:
-
-    1. z-scores each PC and weights it by sqrt(eigenvalue_i / eigenvalue_1), the
-        same scaling as match_case_control_helper.py --weight-eigenvalues.
-    2. Runs k-means for every k on the odd geometric grid 3, 5, 9, 17, 33, ...
-        (2^i + 1) up to --kmax, and keeps the LARGEST k whose clusters are all
-        valid. A cluster is valid if it contains at least one case and at least one
-        control (this also rules out single-sample clusters).
-    3. Fallback, only if no k on the grid is valid: take k = 3 and reassign each
-        member of an invalid cluster to the nearest valid cluster centroid. If no
-        cluster is valid at all, every sample is put in one cluster (equivalent to a
-        global permutation) and a warning is printed.
-
-    Parallelism: each k-means restart (n_init of them per k) is an independent
-    single-threaded task, so the whole grid (len(grid) * n_init tasks) is spread over
-    --workers processes. For each k the restart with the lowest inertia is kept, as
-    sklearn does internally for n_init > 1. Restart seeds come from
-    SeedSequence(seed, spawn_key=(k, restart)), so the result does not depend on
-    --workers.
-
-    Output: a TSV with columns IID, PHENO (0 = control, 1 = case, matching
-    snp_data.npz), CLUSTER, preceded by a '#' comment line recording the settings.
-    """
     args = parse_args()
     eigenvec_path = f"{args.pcaPrefix}.eigenvec"
     eigenval_path = f"{args.pcaPrefix}.eigenval"
@@ -163,19 +221,18 @@ def main():
     X = scale_pcs(pcs, eigval)
 
     print(f"clustering {len(keys)} samples on {args.npcs} PCs "
-          f"(kmax={args.kmax}, n_init={args.n_init}, workers={args.workers}, seed={args.seed})",
+          f"(n_init={args.n_init}, patience={args.patience}, workers={args.workers}, seed={args.seed})",
           flush=True)
-    labels, k, merged = cluster_samples(X, pheno, args.kmax, args.n_init, args.workers, args.seed)
+    labels, k, n_bad, n_moved = cluster_samples(X, pheno, args.n_init, args.workers, args.seed, args.patience, args.kmax)
 
     sizes = np.bincount(labels)
     case_frac = np.bincount(labels, weights=pheno) / sizes
-    print(f"chosen k={k}{' (merged)' if merged else ''}: {sizes.size} clusters, "
+    print(f"chosen k={k} ({n_bad} invalid cluster(s) merged, {n_moved} samples moved): "
+          f"{sizes.size} clusters, "
           f"size min/median/max = {sizes.min()}/{int(np.median(sizes))}/{sizes.max()}, "
           f"case fraction min/max = {case_frac.min():.2f}/{case_frac.max():.2f}", flush=True)
 
     with open(Path(args.out).with_name(f'plink.cluster.tsv'), "w") as out:
-        # out.write(f"# k={k} merged={merged} kmax={args.kmax} n_init={args.n_init} "
-        #           f"seed={args.seed} npcs={args.npcs}\n")
         out.write("IID\tPHENO\tCLUSTER\n")
         for key, ph, cl in zip(keys, pheno, labels):
             out.write(f"{key[-1]}\t{ph}\t{cl}\n")
