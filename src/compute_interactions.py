@@ -1,11 +1,17 @@
-import functools, math, sys
+import math, sys
 from datetime import datetime
 from os import path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import hypergeom
 from scipy.sparse import coo_array, csr_array
+
+from src import hyge_cache as hc
+
+# dtype of the genotype matrices and pair counts in run_single. All counts are whole numbers
+# no larger than the number of samples, so float32 is exact below 2**24 (~16.7M) samples,
+# and its matmuls are about 2x faster than float64 on typical x86 CPUs (AVX2/AVX-512).
+COUNT_DTYPE = np.float32
 
 
 def run_pheno_perm(rng, cluster_file, pheno, iid):
@@ -44,50 +50,6 @@ def run_pheno_perm(rng, cluster_file, pheno, iid):
         phenonew[ind] = pheno[rng.permutation(ind)]
 
     return phenonew
-
-# @functools.lru_cache(maxsize=2_000_000)
-@functools.cache
-def _hyge_single(n, d, g, x):
-    """Single-value hypergeom survival function, cached per (n, d, g, x).
-    M (n) - Total number of objects in the population
-    N (d) - Number of objects drawn, without replacement
-    n (g) - Number of “Type I” (success) objects in the population
-    k (x) - Number of successes in the draw
-    
-    The arg 'k-1' is an upper-tail test of P(X >= k)
-    """
-    return hypergeom.sf(x - 1, n, g, d)  # sf(k - 1, M, n, N)
-
-def _hyge_chunk(arg):
-    n, d, g_chunk, x_chunk = arg
-    out = np.empty(len(g_chunk), dtype=np.float64)
-    for i in range(len(g_chunk)):
-        out[i] = _hyge_single(n, d, g_chunk[i], x_chunk[i])
-    return out
-
-class HygeCache:
-    """Drop-in replacement for HygeCache, but dispatches one value at a time
-    per worker with functools cache, instead of vectorized hypergeom.sf calls.
-
-    Caching only pays off if (n, d, g, x) tuples repeat often within a worker's
-    lifetime across calls sharing the same pool. Since g/x are SNP pair counts
-    bounded by population/case size, repeats are plausible after int rounding -
-    but if most tuples are unique, the per-value Python loop + cache-miss overhead
-    will likely be slower than the vectorized scipy call. Worth benchmarking both
-    on real data before swapping in.
-    """
-    def __init__(self, sample_size, case_size, control_size):
-        self.sample_size = sample_size
-        self.case_size = case_size
-        self.control_size = control_size
-
-    def apply_hyge(self, g, x, case_flag, pool, n_workers):
-        d = self.case_size if case_flag else self.control_size
-        g_chunks = np.array_split(g, n_workers)
-        x_chunks = np.array_split(x, n_workers)
-        args = [(self.sample_size, d, gc, xc) for gc, xc in zip(g_chunks, x_chunks)]
-        results = pool.map(_hyge_chunk, args)
-        return np.concatenate(results)
 
 def save_sparse_array(path, arrays, compressed=False):
     out = {}
@@ -146,9 +108,8 @@ def run_single(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, s
     # read SNP data and convert to dominant and recessive coding
     snp_data = np.load(f"{project_dir}/intermediate/snp_data.npz")
     pheno = snp_data['pheno']
-    G = snp_data['data']  # no missing data (-9) and is type int8.
-    # This data is cast to float64 a little below to allow fast matmul with the phenotype vector
-    
+    G = snp_data['data']  # no missing data (-9), int8, samples x SNPs (Fortran-ordered as saved by data_tools)
+
     # # filter out SNPs that didn't make it through SNP to pathway mapping
     # with open(f"{project_dir}/intermediate/snp_pathway_mapping.pkl", "rb") as f:
     #     snp_pathway_mapping: snpsetclass = pickle.load(f)
@@ -160,44 +121,52 @@ def run_single(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, s
     # G_subset = snp_data.data[:, mapper_subset_to_full_varid]
     # print(f"n SNPs={len(snp_pathway_mapping.spmatrix.index)}", end="", flush=True)
     
-    # convert genotype data to dominant and recessive coding with a simple mapping
-    dom_map = np.array([0, 1, 1])  # dominant:  0->0, 1->1, 2->1 
-    rec_map = np.array([0, 0, 1])  # recessive: 0->0, 1->0, 2->1
-    dataD = dom_map[G]
-    dataR = rec_map[G]
-        
+    # convert genotype data to dominant and recessive coding with a simple mapping.
+    # The maps are COUNT_DTYPE, so the lookup directly gives the matrices used by the
+    # matmuls (no int64 intermediate). Only the coding(s) this model needs are built, and
+    # RR/DD use one matrix for both sides. The lookup keeps G's memory order (Fortran), so
+    # column slices of sx_full/sy_full below are contiguous views.
+    dom_map = np.array([0, 1, 1], dtype=COUNT_DTYPE)  # dominant:  0->0, 1->1, 2->1
+    rec_map = np.array([0, 0, 1], dtype=COUNT_DTYPE)  # recessive: 0->0, 1->0, 2->1
+
     symmetric_flag = (model == 'RR' or model == 'DD')
     if model == 'RR':
-        datai = dataR
-        dataj = dataR
+        sx_full = rec_map[G]
+        sy_full = sx_full
     elif model == 'DD':
-        datai = dataD
-        dataj = dataD
+        sx_full = dom_map[G]
+        sy_full = sx_full
     else:
-        datai = dataR
-        dataj = dataD
+        sx_full = rec_map[G]
+        sy_full = dom_map[G]
+    del G
 
     population_size = pheno.shape[0]
+    if population_size >= 2 ** (np.finfo(COUNT_DTYPE).nmant + 1):
+        sys.exit(f"{population_size} samples is too many for exact counts in {np.dtype(COUNT_DTYPE).name}; "
+                 f"set COUNT_DTYPE = np.float64 in compute_interactions")
     # shuffle phenotypes if R != 0
     if R > 0:
         # single deterministic permutation per R
-        rng = np.random.default_rng(seed * R)
+        rng = np.random.default_rng(seed * R) if seed != 0 else np.random.default_rng(R)
         cluster_file = f"{project_dir}/raw/plink.cluster.tsv"
         if not path.exists(cluster_file):
             permuted_idx = rng.permutation(population_size)
             pheno = pheno[permuted_idx]
         else:
-            print("    shuffling phenotypes within genetic similarity clusters...", end="", flush=True)
             pheno = run_pheno_perm(rng, cluster_file, pheno, snp_data['iid'])
 
     case_size = int(np.count_nonzero(pheno))
     control_size = population_size - case_size
-    cache = HygeCache(population_size, case_size, control_size)
+    cache = hc.HygeCache(population_size, case_size, control_size)
 
-    sx_full = np.ascontiguousarray(datai, dtype=np.float64)
-    sy_full = np.ascontiguousarray(dataj, dtype=np.float64)
-    pheno = np.asarray(pheno, dtype=np.float64).ravel()
+    pheno = np.asarray(pheno, dtype=COUNT_DTYPE).ravel()
     s = sx_full.shape[1]
+
+    # y-side totals don't change between chunks, so compute them once.
+    # pheno @ sy_full equals (sy_full * pheno[:, None]).sum(axis=0) without an N x s temporary.
+    sy_totals = sy_full.sum(axis=0)
+    caseY_totals = pheno @ sy_full
 
     # dividing sx for parallel computing (unchanged balancing logic - earlier chunks have
     # fewer lower-triangle entries for symmetric models, so chunk boundaries are sqrt-spaced)
@@ -222,72 +191,88 @@ def run_single(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, s
         i1 = idx[i]
         i2 = idx[i + 1]
         
-        sx = np.ascontiguousarray(sx_full[:, i1:i2], dtype=np.float64)
+        sx = np.ascontiguousarray(sx_full[:, i1:i2], dtype=COUNT_DTYPE)
         s = sy_full.shape[1]
         tempx = sx * pheno[:, None]
         sx_totals = sx.sum(axis=0)
         casex_totals = tempx.sum(axis=0)
-        sy_totals = sy_full.sum(axis=0)
-        caseY_totals = (sy_full * pheno[:, None]).sum(axis=0)
-        
+
         # For symmetric models (RR/DD) we only need the strict lower triangle of the full
-        # s x s matrix - everything else is filled in by mirroring in run(). Compute the
-        # (local_row, global_col) coordinates of that triangle once, for this worker's row band.
+        # s x s matrix - everything else is filled in by mirroring below. This band's rows are
+        # global SNPs i1..i2-1, so no needed column is >= i2 and the y side is cut to [:, :i2].
+        # RD needs every (row, col) entry of the band.
+        b = i2 - i1
+        ncol = i2 if symmetric_flag else s
+        sy = sy_full[:, :ncol]   # view, no copy
+
+        # g11/x11 are the only counts that need a matmul. The others are derived from them and
+        # the row totals (sx_totals, casex_totals) / column totals (sy_totals, caseY_totals)
+        # entry by entry, so they are computed only for the entries kept, not on full blocks.
+        # ri/ci line the totals up with g11/x11:
+        #   RR/DD: g11/x11 are 1D over the lower-triangle entries -> ri/ci are each entry's
+        #          local row and global column, and the totals are gathered at them
+        #   RD:    g11/x11 are (b, ncol) blocks -> ri/ci broadcast the totals as a column / row
         if symmetric_flag:
-            tril_rows, tril_cols = np.tril_indices(i2 - i1, i1 - 1, s)
-            sel = (tril_rows, tril_cols)
-            out_rows = tril_rows + i1
-            out_cols = tril_cols
+            ri, ci = np.tril_indices(b, i1 - 1, ncol)
+            g11 = (sx.T @ sy)[ri, ci]      # matmul #1; the (b, ncol) block is freed after the gather
+            x11 = (tempx.T @ sy)[ri, ci]   # matmul #2
         else:
-            b = sx.shape[1]
-            rr, cc = np.meshgrid(np.arange(b), np.arange(s), indexing='ij')
-            sel = (rr.ravel(), cc.ravel())
-            out_rows = sel[0] + i1
-            out_cols = sel[1]
+            ri, ci = np.s_[:, None], np.s_[None, :]
+            g11 = sx.T @ sy      # (b, ncol) - matmul #1
+            x11 = tempx.T @ sy   # (b, ncol) - matmul #2
 
-        # cache = hc.HygeCache(population_size, case_size, control_size)
-        g11 = sx.T @ sy_full      # (b, s) - matmul #1
-        x11 = tempx.T @ sy_full   # (b, s) - matmul #2
-        
-        g10 = sx_totals[:, None] - g11
-        g01 = sy_totals[None, :] - g11
-        g00 = population_size - sx_totals[:, None] - sy_totals[None, :] + g11
-        
-        x10 = casex_totals[:, None] - x11
-        x01 = caseY_totals[None, :] - x11
-        x00 = case_size - casex_totals[:, None] - caseY_totals[None, :] + x11
-        
+        g10 = sx_totals[ri] - g11
+        g01 = sy_totals[ci] - g11
+        g00 = population_size - sx_totals[ri] - sy_totals[ci] + g11
+
+        x10 = casex_totals[ri] - x11
+        x01 = caseY_totals[ci] - x11
+        x00 = case_size - casex_totals[ri] - caseY_totals[ci] + x11
+
+        # helper_score_from_counts takes 1D arrays; for RD this flattens the blocks (views, no copy)
+        g11, g10, g01, g00 = g11.ravel(), g10.ravel(), g01.ravel(), g00.ravel()
+        x11, x10, x01, x00 = x11.ravel(), x10.ravel(), x01.ravel(), x00.ravel()
+
+        # -log10(p-values) for risk, with alpha1/alpha2 filtering
+        risk_score = helper_score_from_counts(cache, g11, x11, g10, x10,
+                                        g01, x01, g00, x00, alpha1, alpha2, True, pool, n_workers)
+
         # xp_* = g_* - x_* because pheno_res = 1 - pheno is linear in the counts above.
-        xp11 = g11 - x11
-        xp10 = g10 - x10
-        xp01 = g01 - x01
-        xp00 = g00 - x00
-        
-        g11_v, x11_v = g11[sel], x11[sel]
-        g10_v, x10_v = g10[sel], x10[sel]
-        g01_v, x01_v = g01[sel], x01[sel]
-        g00_v, x00_v = g00[sel], x00[sel]
-        xp11_v, xp10_v = xp11[sel], xp10[sel]
-        xp01_v, xp00_v = xp01[sel], xp00[sel]
-        
-        # -log10(p-values) for risk and protective, with alpha1/alpha2 filtering
-        risk_score = helper_score_from_counts(cache, g11_v, x11_v, g10_v, x10_v,
-                                        g01_v, x01_v, g00_v, x00_v, alpha1, alpha2, True, pool, n_workers)
-        prot_score = helper_score_from_counts(cache, g11_v, xp11_v, g10_v, xp10_v,
-                                        g01_v, xp01_v, g00_v, xp00_v, alpha1, alpha2, False, pool, n_workers)
+        # x_* aren't needed after the risk score, so xp_* are written into their memory.
+        xp11 = np.subtract(g11, x11, out=x11)
+        xp10 = np.subtract(g10, x10, out=x10)
+        xp01 = np.subtract(g01, x01, out=x01)
+        xp00 = np.subtract(g00, x00, out=x00)
+        del x11, x10, x01, x00   # these names would now refer to the xp_* values
 
+        # -log10(p-values) for protective, with alpha1/alpha2 filtering
+        prot_score = helper_score_from_counts(cache, g11, xp11, g10, xp10,
+                                        g01, xp01, g00, xp00, alpha1, alpha2, False, pool, n_workers)
+
+        # (row, col) coordinates are only built for the nonzero scores
         nz_r = risk_score != 0
-        risk_rows = out_rows[nz_r]
-        risk_cols = out_cols[nz_r]
+        if symmetric_flag:
+            risk_rows, risk_cols = ri[nz_r] + i1, ci[nz_r]
+        else:
+            flat_r = np.flatnonzero(nz_r)
+            risk_rows, risk_cols = flat_r // ncol + i1, flat_r % ncol
         risk_vals = risk_score[nz_r]
-        
+
         nz_p = prot_score != 0
-        prot_rows = out_rows[nz_p]
-        prot_cols = out_cols[nz_p]
+        if symmetric_flag:
+            prot_rows, prot_cols = ri[nz_p] + i1, ci[nz_p]
+        else:
+            flat_p = np.flatnonzero(nz_p)
+            prot_rows, prot_cols = flat_p // ncol + i1, flat_p % ncol
         prot_vals = prot_score[nz_p]
-        
+
         results.append((risk_rows, risk_cols, risk_vals, prot_rows, prot_cols, prot_vals))
-    
+
+        # free this chunk's arrays before the next chunk allocates its own
+        del sx, tempx, ri, ci, g11, g10, g01, g00, xp11, xp10, xp01, xp00
+        del risk_score, prot_score, nz_r, nz_p
+    del sx_full, sy_full
+
     risk_rows = np.concatenate([ r[0] for r in results ])
     risk_cols = np.concatenate([ r[1] for r in results ])
     risk_vals = np.concatenate([ r[2] for r in results ])
