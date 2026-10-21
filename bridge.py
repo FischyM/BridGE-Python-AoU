@@ -1,6 +1,7 @@
-import argparse, psutil, signal, sys, threading, time
+import argparse, psutil, signal, sys, threading, time, os
 import multiprocessing as mp
-from os import path
+
+from joblib import cpu_count
 
 from src import data_tools as dt
 from src import compute_interactions as ci
@@ -61,7 +62,7 @@ def parse_args():
 
 def require_exists(*filepaths):
     for filepath in filepaths:
-        if not path.exists(filepath):
+        if not os.path.exists(filepath):
             sys.exit(f'{filepath} not found')
 
 
@@ -221,6 +222,8 @@ MODULES_RUN = {
 
 def main():
     args = parse_args()
+    if args.n_workers is None:
+        args.n_workers = cpu_count()
     module_fn = MODULES_RUN.get(args.module)
     if module_fn is None:
         sys.exit(f'unknown module: {args.module!r}')

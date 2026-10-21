@@ -1,0 +1,49 @@
+import functools
+
+import numpy as np
+from scipy.stats import hypergeom
+
+
+# @functools.lru_cache(maxsize=2_000_000)
+@functools.cache
+def _hyge_single(n, d, g, x):
+    """Single-value hypergeom survival function, cached per (n, d, g, x).
+    M (n) - Total number of objects in the population
+    N (d) - Number of objects drawn, without replacement
+    n (g) - Number of “Type I” (success) objects in the population
+    k (x) - Number of successes in the draw
+    
+    The arg 'k-1' is an upper-tail test of P(X >= k)
+    """
+    return hypergeom.sf(x - 1, n, g, d)  # sf(k - 1, M, n, N)
+
+def _hyge_chunk(arg):
+    n, d, g_chunk, x_chunk = arg
+    out = np.empty(len(g_chunk), dtype=np.float64)
+    for i in range(len(g_chunk)):
+        out[i] = _hyge_single(n, d, g_chunk[i], x_chunk[i])
+    return out
+
+class HygeCache:
+    """Drop-in replacement for HygeCache, but dispatches one value at a time
+    per worker with functools cache, instead of vectorized hypergeom.sf calls.
+
+    Caching only pays off if (n, d, g, x) tuples repeat often within a worker's
+    lifetime across calls sharing the same pool. Since g/x are SNP pair counts
+    bounded by population/case size, repeats are plausible after int rounding -
+    but if most tuples are unique, the per-value Python loop + cache-miss overhead
+    will likely be slower than the vectorized scipy call. Worth benchmarking both
+    on real data before swapping in.
+    """
+    def __init__(self, sample_size, case_size, control_size):
+        self.sample_size = sample_size
+        self.case_size = case_size
+        self.control_size = control_size
+
+    def apply_hyge(self, g, x, case_flag, pool, n_workers):
+        d = self.case_size if case_flag else self.control_size
+        g_chunks = np.array_split(g, n_workers)
+        x_chunks = np.array_split(x, n_workers)
+        args = [(self.sample_size, d, gc, xc) for gc, xc in zip(g_chunks, x_chunks)]
+        results = pool.map(_hyge_chunk, args)
+        return np.concatenate(results)

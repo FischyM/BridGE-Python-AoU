@@ -213,7 +213,7 @@ def gene2pathway(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap
     #         symboldict[symbol] = int(entrez_id)
 
     print(f"    {len(gene_pathway_df)} genes, {len(gene_pathway_df.columns)} pathways")
-    gene_pathway_df.to_parquet(output_file, index=True, compression='zstd')
+    gene_pathway_df.to_parquet(output_file, index=True, compression='zstd', engine='pyarrow')
     
     # save filtered dataframes to csv for inspection
     with open(symbols_file.replace(".symbols.gmt", ".filtered.symbols.gmt"), 'w') as f:
@@ -293,7 +293,7 @@ def snp2gene(pvar_file, gene_annotation_file, output_file):
     snp_gene_df = pd.DataFrame(sparse_array.toarray(), index=snplist, columns=genelist, dtype=bool)
     print(f"    removed {len(variant_df) - len(snplist)} SNPs")
     print(f"    {len(snplist)} SNPs, {len(genelist)} genes")
-    snp_gene_df.to_parquet(output_file, index=True, compression='zstd')
+    snp_gene_df.to_parquet(output_file, index=True, compression='zstd', engine='pyarrow')
         
 
 def snp2pathway(project_dir, output_file):
@@ -329,7 +329,7 @@ def snp2pathway(project_dir, output_file):
                                 index=pd.Series(tmp_sgm.index, name='varid'),
                                 columns=pd.Series(tmp_gpm.columns, name='pathway'))
     print(f"    {snp_pathway_df.shape[0]} SNPs, {snp_pathway_df.shape[1]} pathways")
-    snp_pathway_df.to_parquet(output_file, index=True, compression='zstd')
+    snp_pathway_df.to_parquet(output_file, index=True, compression='zstd', engine='pyarrow')
 
 
 def _bpm_row(snp_pathway_np, i):
@@ -397,7 +397,7 @@ def pathway_indices(project_dir, min_path, n_workers, output_file):
     # filter out pathways that are too small given the available SNPs in the WPM
     wpm = wpm[(wpm['indsize'] >= min_path)].reset_index(drop=True)
     print(f"    Total WPMs after filtering with min_path={min_path}: {len(wpm):,} / {len(pathways):,}")
-    wpm.to_parquet(f"{output_file}-wpm.parquet", index=True, compression='snappy')
+    wpm.to_parquet(f"{output_file}-wpm.parquet", index=True, compression='zstd', engine='pyarrow')
 
     # Finding all possible combinations of pairs for pathway names and sizes.
     # combnames = np.array(list(combinations(wpm['pathway'], 2)))
@@ -431,5 +431,5 @@ def pathway_indices(project_dir, min_path, n_workers, output_file):
     # filter out pathways that are too small after removing SNPs that are in both pathways of a BPM
     bpm = bpm[(bpm['ind1size'] >= min_path) & (bpm['ind2size'] >= min_path)].reset_index(drop=True)
     print(f"    Total BPMs after filtering with min_path={min_path}: {len(bpm):,} / {len(combnames):,}")
-    bpm.to_parquet(f"{output_file}-bpm.parquet", index=True, compression='zstd')
+    bpm.to_parquet(f"{output_file}-bpm.parquet", index=True, compression='zstd', engine='pyarrow')
 

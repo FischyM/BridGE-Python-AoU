@@ -12,3 +12,13 @@ export PATH=$CURRENTDIR:$PATH
 export PATH=$CURRENTDIR/scripts:$PATH
 export PATH=$CURRENTDIR/cassi:$PATH
 alias plink2='${CURRENTDIR}/scripts/plink2'
+
+if [ -z "$CONDA_PREFIX" ]
+then 
+    echo "No conda environment activated"
+    source activate bridge-aou
+else 
+    echo "Conda environment is already activated: $CONDA_PREFIX"
+fi
+
+python -m py_compile bridge.py
