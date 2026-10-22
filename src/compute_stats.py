@@ -12,7 +12,7 @@ np.seterr(divide='ignore', invalid='ignore')
 
 
 # ---------------------------------------------------------------------------
-# sparse array saving and loading functions
+# sparse array saving function
 # ---------------------------------------------------------------------------
 
 def load_sparse_array(path):
@@ -236,7 +236,7 @@ def call_chi2(a, b, c, d, ignore=None):
     reportable = negative if ignore is None else (negative & ~ignore)
     n_neg = int(np.count_nonzero(reportable))
     if n_neg:
-        print(f"\twarning: {n_neg} chi2 table row(s) contained a negative count and were set "
+        print(f"    warning: {n_neg} chi2 table row(s) contained a negative count and were set "
               f"to p=1; check the size vs interaction-count pair conventions upstream", flush=True)
     return results
 
@@ -504,7 +504,7 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
     # -------------------------------------------------
     # BPM binary chi2
     # -------------------------------------------------
-    print("\tBPM chi2: ", end="", flush=True)
+    print("    BPM chi2: ", end="", flush=True)
     t1 = datetime.now()
     # `tr` is a mask instead of an O(n^2) `in` test
     tr_mask = (bpmind1size < 5) | (bpmind2size < 5)
@@ -602,7 +602,7 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
     # -------------------------------------------------
     # WPM Chi2
     # -------------------------------------------------
-    print("\tWPM chi2: ", end="", flush=True)
+    print("    WPM chi2: ", end="", flush=True)
     t1 = datetime.now()
     wpmgi = np.ascontiguousarray(np.diagonal(pair))
     wpmnotgi = wpmsize - wpmgi
@@ -667,10 +667,12 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
         mm = mm_scores
         sumMM = np.asarray(mm.sum(axis=1)).ravel()
         path_sumMM = np.asarray(pmat.T @ sumMM).ravel()
+        
+        
         # -------------------------------------------------
         # BPM ranksum test
         # -------------------------------------------------
-        print("\tBPM ranksum: ", end="", flush=True)
+        print("    BPM ranksum: ", end="", flush=True)
         t1 = datetime.now()
         bpmsum = np.zeros(bpm_size)
         density_bpm = np.zeros(bpm_size)
@@ -710,10 +712,11 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
         ind2keep_bpm = (bpm_local >= -1 * np.log10(0.05))
         print(f"{ind2keep_bpm.sum():,} passed - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
+
         # -------------------------------------------------
         # WPM ranksum
         # -------------------------------------------------
-        print("\tWPM ranksum: ", end="", flush=True)
+        print("    WPM ranksum: ", end="", flush=True)
         t1 = datetime.now()
         density_wpm = np.zeros(wpm_size)
         wpmsum = np.zeros(wpm_size)
@@ -735,10 +738,11 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
         ind2keep_wpm = (wpm_local >= -1 * np.log10(0.05))
         print(f"{ind2keep_wpm.sum():,} passed - {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
+
     # -------------------------------------------------
     # expected densities
     # -------------------------------------------------
-    print("\tComputing expected densities ", end="", flush=True)
+    print("    Computing expected densities ", end="", flush=True)
     t1 = datetime.now()
     # sum(sumMM[row set]) for EVERY bpm - the original computes expected density for all of
     # them, including the ones excluded from the chi2 test - against the final sumMM, which the
@@ -763,11 +767,12 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
     ind2keep_path = (path_degree >= -1 * np.log10(0.1))
     print(f"- {str(datetime.now() - t1).split('.')[0]}", flush=True)
 
+
     # -------------------------------------------------
     # SNP permutations
     # -------------------------------------------------
     # random snp permutation to compute emirical p-value for the significant bpms
-    print("\tSNP permutation ", end="", flush=True)
+    print("    SNP permutation ", end="", flush=True)
     t1 = datetime.now()
     bpm_local_pv = np.ones(bpm_size)
     wpm_local_pv = np.ones(wpm_size)
