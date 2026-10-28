@@ -128,15 +128,14 @@ def flat_lists(lists):
     Workers read SNP lists in this form rather than as a Python list of arrays: reading an
     array object from a list writes its reference count, which makes a forked worker copy that
     memory page, and across hundreds of thousands of lists that is hundreds of MB per worker.
-    Slicing one flat array touches no Python objects. SNP indices are stored as int32 (they are
-    < number of SNPs), which halves the copy; indexing with them gives the same results.
+    Slicing one flat array touches no Python objects.
     """
     n = len(lists)
     off = np.zeros(n + 1, dtype=np.int64)
     if n == 0:
-        return np.zeros(0, dtype=np.int32), off
+        return np.zeros(0, dtype=np.int64), off
     np.cumsum(np.fromiter((x.size for x in lists), dtype=np.int64, count=n), out=off[1:])
-    flat = np.empty(int(off[-1]), dtype=np.int32)
+    flat = np.empty(int(off[-1]), dtype=np.int64)
     for k, x in enumerate(lists):
         flat[off[k]:off[k + 1]] = x
     return flat, off
@@ -606,7 +605,7 @@ def bpm_pathway_ids(bpm, wpm):
     if missing.any():
         raise ValueError(f"{int(missing.sum()):,} BPM row(s) name a pathway that is not in the "
                          f"WPM table; the BPM and WPM tables must come from the same BPMind file")
-    return idx1.astype(np.int32), idx2.astype(np.int32)
+    return idx1.astype(np.int64), idx2.astype(np.int64)
 
 
 def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, output_file, compressed=False):
