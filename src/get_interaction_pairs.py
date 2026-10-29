@@ -264,7 +264,7 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
 
         # slice the sparse network first, then densify only the module block
         ssm_dis = ssm[ind1][:, ind2].toarray()
-        if model == 'combined':
+        if model == 'combined' and not imported_ssm:
             m_id = max_id[ind1][:, ind2].toarray()  # type: ignore
 
         # For a WPM both sides are the same pathway, so only one triangle counts.
@@ -282,8 +282,11 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
         freq_control = np.zeros(interaction_pairs)
         snp_pair = np.zeros((pheno_size, interaction_pairs))
 
-        # per-pair genotype model ('combined' picks it from max_id)
-        if model == 'combined':
+        # per-pair genotype model ('combined' picks it from max_id). An imported network
+        # has none: its frequencies stay zero and those columns are dropped below.
+        if imported_ssm:
+            tmp_model = np.full(interaction_pairs, 'imported', dtype=object)
+        elif model == 'combined':
             tmp_model = np.array([COMBINED_IDS.get(dm, 'combined') for dm in m_id[i, j].tolist()], dtype=object)  # type: ignore
             if np.any(tmp_model == 'combined'):
                 # the original would fail here too (GI type list shorter than the table)
@@ -341,7 +344,7 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
         odds_ratio = np.divide(np.multiply(1 - freq_control, freq_case),
                                np.multiply(1 - freq_case, freq_control))
 
-        if model in ('RR', 'RD', 'DD', 'combined'):
+        if not imported_ssm:
             gt_type = np.array([GT_LABELS[m] for m in tmp_model], dtype=object)
         else:
             gt_type = np.full(interaction_pairs, 'imported', dtype=object)

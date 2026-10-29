@@ -11,7 +11,10 @@ from src import collect_results as cr
 
 
 MODULE_CHOICES = ('DataProcess', 'ComputeInteraction', 'ComputeStats', 'ComputeFDR', 'Summarize')
-VALID_MODELS = ('RR', 'RD', 'DD', 'combined')
+GENOTYPE_MODELS = ('RR', 'RD', 'DD', 'combined')
+# networks imported from CASSI, made by scripts/cassi-run.sh as snp_interaction_networks-cassi_<GI>-R<i>.npz
+CASSI_MODELS = ('cassi_LR', 'cassi_LIN', 'cassi_JE', 'cassi_AWU', 'cassi_AFE', 'cassi_WZ')
+VALID_MODELS = GENOTYPE_MODELS + CASSI_MODELS
 # SIM_MEASURES = ('jaccard', 'overlap', 'either', 'none')
 
 def parse_args():
@@ -101,6 +104,8 @@ def run_data_process(args):
 
 
 def run_compute_interaction(args):
+    if args.model in CASSI_MODELS:
+        sys.exit(f"{args.model} networks are computed by scripts/cassi-run.sh, not ComputeInteraction")
     print("Computing SNP-SNP Interactions")
 
     # setup memory tracking
@@ -201,11 +206,11 @@ def run_compute_fdr(args):
 
 
 def run_summarize(args):
+    # a network not computed from the genotypes here has no genotype-derived columns to report
+    imported = args.ssm_file is not None or args.model in CASSI_MODELS
     if args.ssm_file is None:
-        imported = False
         snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R0.npz"
     else:
-        imported = True
         snp_int_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
     
     print(f'Summarizing results')

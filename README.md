@@ -119,7 +119,7 @@ There are only two required args for all of the 5 modules, however, the example 
 
 Then, there are common args that are used in more than one module
 
-- model: indicates the SNP interaction model which can be 'RR', 'RD', 'DD', or 'combined'. We suggest to use combined.
+- model: indicates the SNP interaction model which can be 'RR', 'RD', 'DD', or 'combined'. We suggest to use combined. Networks imported from CASSI with 'scripts/cassi-run.sh' use 'cassi_\<GI>' ('cassi_LR', 'cassi_LIN', 'cassi_JE', 'cassi_AWU', 'cassi_AFE', or 'cassi_WZ') in ComputeStats, ComputeFDR, and Summarize.
 - nWorker: the number of cores/CPUs used to paralleize work. More workers will use more RAM.
 - nJobs: the number of segments used to split up the work. This can be used to reduce the overall RAM usage without greatly extending computational time.
 - i: a single network to run. For the real network use '0', and any random network will be '1' or higher.
@@ -207,7 +207,7 @@ This module computes per-pathway statistics for a protective and risk model assu
 
 Input:
 
-Optionally, one can use an additive evaluation of SNP interactions using the CASSI software, which can be supplied to BridGE with the 'ssmFile' arg. See 'CASSI' section for details on how to run this.
+Optionally, one can use an additive evaluation of SNP interactions using the CASSI software. 'scripts/cassi-run.sh' writes those networks to the 'intermediate' directory as 'snp_interaction_networks-cassi_\<GI>-R\<i>.npz', so they are used by giving '--model=cassi_\<GI>' (e.g. '--model=cassi_LR') to ComputeStats, ComputeFDR, and Summarize in place of a BridGE model. Any other network file can be supplied with the 'ssmFile' arg.
 
 Args:
 
