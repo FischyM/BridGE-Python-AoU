@@ -2,11 +2,39 @@ import sys
 from itertools import combinations
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from joblib import Parallel, delayed
 from matplotlib import pyplot as plt
 from scipy.sparse import csr_array, coo_array
 from pgenlib import PgenReader
+
+from src.polars_io import read_whitespace
+
+
+def _read_plink_table(path, int_columns):
+    """Read a plink2 .pvar/.psam: tab-separated, header line after any '##' lines.
+
+    Everything is read as text, then int_columns are cast to Int64 (entries that
+    are not integers, e.g. 'NA', become null).
+    """
+    with open(path) as f:
+        skip = sum(1 for line in f if line.startswith("##"))
+    table = pl.read_csv(path, separator="\t", skip_rows=skip, infer_schema=False)
+    return table.with_columns(pl.col(int_columns).cast(pl.Int64, strict=False))
+
+
+def _read_gmt(path, set_column):
+    """Read an MSigDB .gmt file: per line a set name, a url, then the tab-separated members.
+
+    Returns columns pathway_names, url and set_column (a list of the members).
+    """
+    with open(path) as f:
+        lines = [line.rstrip('\n') for line in f]
+    gmt = pl.DataFrame({'line': [line for line in lines if line]}, schema={'line': pl.String})
+    return (gmt.select(pl.col('line').str.splitn('\t', 3)
+                       .struct.rename_fields(['pathway_names', 'url', set_column]))
+               .unnest('line')
+               .with_columns(pl.col(set_column).str.split('\t')))
 
 
 def imputesnp(data: np.ndarray) -> np.ndarray:
@@ -36,21 +64,13 @@ def convert_plink(pgen_file, pvar_file, psam_file, output_file, compressed=False
     """
     
     # https://www.cog-genomics.org/plink/2.0/formats#pvar
-    # this file has a header, so we can read it directly
-    # but since it may have comments at the top, we need to skip those lines
-    with open(pvar_file) as f:
-        skip = sum(1 for line in f if line.startswith("##"))
-    variant_df = pd.read_csv(pvar_file, sep="\t", header=0, skiprows=skip)
-    
     # https://www.cog-genomics.org/plink/2.0/formats#psam
-    # this file has a header, so we can read it directly
-    # but since it may have comments at the top, we need to skip those lines
-    with open(psam_file) as f:
-        skip = sum(1 for line in f if line.startswith("##"))
-    sample_df = pd.read_csv(psam_file, sep="\t", header=0, skiprows=skip)
+    # both have a header, possibly preceded by '##' comment lines
+    variant_df = _read_plink_table(pvar_file, ['POS'])
+    sample_df = _read_plink_table(psam_file, ['PHENO1', 'SEX'])
 
-    print(f"    Phenotype composition: {np.unique(sample_df.PHENO1, return_counts=True)}")
-    print(f"    Sex composition: {np.unique(sample_df.SEX, return_counts=True)}")
+    print(f"    Phenotype composition: {np.unique(sample_df['PHENO1'].to_numpy(), return_counts=True)}")
+    print(f"    Sex composition: {np.unique(sample_df['SEX'].to_numpy(), return_counts=True)}")
 
     # read genotypes with pgenlib
     with PgenReader(pgen_file.encode()) as pgr:
@@ -84,12 +104,12 @@ def convert_plink(pgen_file, pvar_file, psam_file, output_file, compressed=False
     # compressed takes longer, but saves space. Consider using compressed for large datasets.
     out = {
         "data": G,
-        "varid": variant_df.ID.to_numpy().astype(str),
+        "varid": variant_df['ID'].to_numpy().astype(str),
         "chrom": variant_df['#CHROM'].to_numpy().astype(str),
-        "pos": variant_df.POS.to_numpy(),
-        "pheno": sample_df.PHENO1.to_numpy() - 1,
-        "iid": sample_df.IID.to_numpy().astype(str),
-        "sex": sample_df.SEX.to_numpy(),
+        "pos": variant_df['POS'].to_numpy(),
+        "pheno": sample_df['PHENO1'].to_numpy() - 1,
+        "iid": sample_df['IID'].to_numpy().astype(str),
+        "sex": sample_df['SEX'].to_numpy(),
     }
     (np.savez_compressed if compressed else np.savez)(output_file, allow_pickle=False, **out)
 
@@ -144,16 +164,9 @@ def gene2pathway(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap
         tmp_str = ""
         
     # load pathway files
-    symbols_df = pd.read_csv(symbols_file, header=None)
-    symbols_df = symbols_df[0].str.split('\t', expand=True, n=2)
-    symbols_df.columns = ['pathway_names', "url", "gene_names"]
-    symbols_df['gene_names'] = symbols_df['gene_names'].str.split('\t')
+    symbols_df = _read_gmt(symbols_file, "gene_names")
+    entrez_df = _read_gmt(entrez_file, "entrez_ids")
 
-    entrez_df = pd.read_csv(entrez_file, header=None)
-    entrez_df = entrez_df[0].str.split('\t', expand=True, n=2)
-    entrez_df.columns = ['pathway_names', "url", "entrez_ids"]
-    entrez_df['entrez_ids'] = entrez_df['entrez_ids'].str.split('\t')
-    
     # filter pathways based in size and similarity
     if not symbols_df['pathway_names'].equals(entrez_df['pathway_names']):
         sys.exit(
@@ -162,16 +175,17 @@ def gene2pathway(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap
         )
         
     # size filter, applied before redundancy filtering (see module docstring).
-    candidates = [row.Index for row in symbols_df.itertuples() if min_size <= len(row.gene_names) <= max_size]
+    gene_names = symbols_df['gene_names'].to_list()
+    candidates = [i for i, genes in enumerate(gene_names) if min_size <= len(genes) <= max_size]
     print(f"    size filter [{min_size}, {max_size}]: {len(candidates)} / {len(symbols_df)} pathways")
-    
+
     # greedy redundancy filter, smallest pathway first
-    ordered = sorted(candidates, key=lambda i: len(symbols_df.loc[i, 'gene_names']))
+    ordered = sorted(candidates, key=lambda i: len(gene_names[i]))
     if sim_measure in ('jaccard', 'overlap', 'either'):
         keep_pathway_inds = []  # indices into the original (unsorted) arrays, in size-ascending order
         keep_gene_sets = []
         for i in ordered:
-            query_gene_set = set(symbols_df.loc[i, 'gene_names'])
+            query_gene_set = set(gene_names[i])
             keep = True
             for gene_set in keep_gene_sets:
                 if too_similar(gene_set, query_gene_set, sim_measure, jaccard_cutoff, overlap_cutoff):
@@ -183,45 +197,46 @@ def gene2pathway(symbols_file, entrez_file, sim_measure, jaccard_cutoff, overlap
         print(f"    kept {len(keep_pathway_inds)} / {len(candidates)} size-filtered pathways{tmp_str}")
         
         # filter the original dataframes to only include the kept pathways
-        symbols_df = symbols_df.loc[keep_pathway_inds].reset_index(drop=True)
-        entrez_df = entrez_df.loc[keep_pathway_inds].reset_index(drop=True)
-        
+        symbols_df = symbols_df[keep_pathway_inds]
+        entrez_df = entrez_df[keep_pathway_inds]
+
     else:
-        symbols_df = symbols_df.loc[ordered].reset_index(drop=True)
-        entrez_df = entrez_df.loc[ordered].reset_index(drop=True)
+        symbols_df = symbols_df[ordered]
+        entrez_df = entrez_df[ordered]
         print(f"    kept {len(ordered)} / {len(candidates)} size-filtered pathways: no similarity measure applied")
 
-    
+
     # make gene by pathway binary matrix
-    pathway_list = symbols_df['pathway_names'].tolist()
-    gene_list = list(set([gene for sublist in symbols_df['gene_names'].tolist() for gene in sublist]))
-    gene_pathway_df = pd.DataFrame(np.zeros((len(gene_list), len(pathway_list))),
-                            index=pd.Series(gene_list, name='genes'),
-                            columns=pd.Series(pathway_list, name='pathway'),
-                            dtype=bool)
-    
+    pathway_list = symbols_df['pathway_names'].to_list()
+    gene_sets = symbols_df['gene_names'].to_list()
+    gene_list = list(set([gene for sublist in gene_sets for gene in sublist]))
+    gene_row = {gene: i for i, gene in enumerate(gene_list)}
+    gene_pathway = np.zeros((len(gene_list), len(pathway_list)), dtype=bool)
+
     # fill out binary matrix
-    for pathway in pathway_list:
-        pathway_mask: pd.Series = symbols_df['pathway_names'] == pathway
-        genes_in_pathway = symbols_df.loc[pathway_mask, 'gene_names'].tolist()[0]
-        gene_pathway_df.loc[genes_in_pathway, pathway] = True
-    
+    for j, genes_in_pathway in enumerate(gene_sets):
+        gene_pathway[[gene_row[g] for g in genes_in_pathway], j] = True
+
+    # genes are rows (named in the 'genes' column), pathways are the remaining columns
+    gene_pathway_df = pl.from_numpy(gene_pathway, schema=pathway_list, orient='row')
+    gene_pathway_df.insert_column(0, pl.Series('genes', gene_list, dtype=pl.String))
+
     # # Creating dictionary for easy lookup of entrezID by symbol.
     # symboldict = {}
     # for symbol_genes, entrez_ids in zip(symbols_df['gene_names'].tolist(), entrez_df['entrez_ids'].tolist()):
     #     for symbol, entrez_id in zip(symbol_genes, entrez_ids):
     #         symboldict[symbol] = int(entrez_id)
 
-    print(f"    {len(gene_pathway_df)} genes, {len(gene_pathway_df.columns)} pathways")
-    gene_pathway_df.to_parquet(output_file, index=True, compression='zstd', engine='pyarrow')
-    
+    print(f"    {len(gene_list)} genes, {len(pathway_list)} pathways")
+    gene_pathway_df.write_parquet(output_file, compression='zstd')
+
     # save filtered dataframes to csv for inspection
     with open(symbols_file.replace(".symbols.gmt", ".filtered.symbols.gmt"), 'w') as f:
-        for _, row in symbols_df.iterrows():
-            f.write(f"{row['pathway_names']}\t{row['url']}\t" + "\t".join(row['gene_names']) + "\n")
+        for name, url, genes in symbols_df.iter_rows():
+            f.write(f"{name}\t{url}\t" + "\t".join(genes) + "\n")
     with open(entrez_file.replace(".entrez.gmt", ".filtered.entrez.gmt"), 'w') as f:
-        for _, row in entrez_df.iterrows():
-            f.write(f"{row['pathway_names']}\t{row['url']}\t" + "\t".join(map(str, row['entrez_ids'])) + "\n")
+        for name, url, entrez_ids in entrez_df.iter_rows():
+            f.write(f"{name}\t{url}\t" + "\t".join(map(str, entrez_ids)) + "\n")
 
 
 def snp2gene(pvar_file, gene_annotation_file, output_file):
@@ -233,28 +248,25 @@ def snp2gene(pvar_file, gene_annotation_file, output_file):
         output_file (str): file name for saving the results.
     """
     
-    # Creating SNP dataframe from snp annotation file.
-    with open(pvar_file) as f:
-        skip = sum(1 for line in f if line.startswith("##"))
-    variant_df = pd.read_csv(pvar_file, sep="\t", header=0, skiprows=skip)
-    variant_df['#CHROM'] = pd.to_numeric(variant_df['#CHROM'])
+    # Creating SNP dataframe from snp annotation file (a non-numeric chromosome is an error).
+    variant_df = _read_plink_table(pvar_file, ['POS']).with_columns(pl.col('#CHROM').cast(pl.Int64))
 
-    # Creating gene dataframe from gene annotation file.
+    # Creating gene dataframe from gene annotation file, autosomes only.
     gene_header = ['#CHROM', 'geneloc1', 'geneloc2', 'gene']
-    gene_df = pd.read_csv(gene_annotation_file, sep=r"\s+", names=gene_header)
-    gene_df = gene_df[gene_df["#CHROM"].apply(lambda x: x.isnumeric())]
-    gene_df['#CHROM'] = pd.to_numeric(gene_df['#CHROM'])
-    gene_df.sort_values(by='#CHROM', inplace=True)
+    gene_df = read_whitespace(gene_annotation_file, has_header=False, new_columns=gene_header, infer_schema=False)
+    gene_df = (gene_df.filter(pl.col('#CHROM').str.contains(r'^[0-9]+$'))
+                      .with_columns(pl.col('#CHROM', 'geneloc1', 'geneloc2').cast(pl.Int64))
+                      .sort('#CHROM', maintain_order=True))
 
     # replacement to avoid a large outer join of SNPs to genes by chrom and improve performance
     snp_ids_matched = []
     genes_matched = []
 
-    variant_groups = dict(tuple(variant_df.groupby('#CHROM', sort=False)))
+    variant_groups = variant_df.partition_by('#CHROM', as_dict=True)
 
-    for chrom, gene_sub in gene_df.groupby('#CHROM', sort=False):
-        variant_sub = variant_groups.get(chrom)
-        if variant_sub is None or gene_sub.empty:
+    for (chrom,), gene_sub in gene_df.partition_by('#CHROM', maintain_order=True, as_dict=True).items():
+        variant_sub = variant_groups.get((chrom,))
+        if variant_sub is None or gene_sub.is_empty():
             continue
 
         # Sort this chromosome's SNPs by position once.
@@ -280,20 +292,23 @@ def snp2gene(pvar_file, gene_annotation_file, output_file):
     all_genes = np.concatenate(genes_matched)
 
     # keep every input SNP (mapped or not) as a row; genes are those with >=1 SNP
-    snplist = variant_df['ID'].reset_index(drop=True)
-    genelist = pd.Series(all_genes).drop_duplicates().reset_index(drop=True)
-    
+    snplist = variant_df['ID']
+    genelist = pl.Series(all_genes).unique(maintain_order=True).to_list()
+
     # use sparse array to quickly create snp to gene mapping matrix
     snp_idx = {v: i for i, v in enumerate(snplist)}
     gene_idx = {v: i for i, v in enumerate(genelist)}
-    rows = pd.Series(all_ids).map(snp_idx).to_numpy()
-    cols = pd.Series(all_genes).map(gene_idx).to_numpy()
-    data = np.ones(len(all_ids))
+    rows = pl.Series(all_ids).replace_strict(snp_idx).to_numpy()
+    cols = pl.Series(all_genes).replace_strict(gene_idx).to_numpy()
+    data = np.ones(len(all_ids), dtype=bool)
     sparse_array = coo_array((data, (rows, cols)), shape=(len(snplist), len(genelist)))
-    snp_gene_df = pd.DataFrame(sparse_array.toarray(), index=snplist, columns=genelist, dtype=bool)
+
+    # SNPs are rows (named in the 'ID' column), genes are the remaining columns
+    snp_gene_df = pl.from_numpy(sparse_array.toarray(), schema=genelist, orient='row')
+    snp_gene_df.insert_column(0, snplist)
     print(f"    removed {len(variant_df) - len(snplist)} SNPs")
     print(f"    {len(snplist)} SNPs, {len(genelist)} genes")
-    snp_gene_df.to_parquet(output_file, index=True, compression='zstd', engine='pyarrow')
+    snp_gene_df.write_parquet(output_file, compression='zstd')
         
 
 def snp2pathway(project_dir, output_file):
@@ -304,32 +319,37 @@ def snp2pathway(project_dir, output_file):
         output_file (str): Path to the output parquet file.
     """
     
-    # snps are rows, genes are columns, bool values converted to int64 for matrix multiplication
-    snp_gene_df = pd.read_parquet(f"{project_dir}/intermediate/snp_gene_mapping.parquet").astype(np.int64)
-    print(f"    {snp_gene_df.shape[0]} SNPs, {snp_gene_df.shape[1]} genes") 
-    
-    # genes are rows, pathways are columns, bool values converted to int64 for matrix multiplication
-    gene_pathway_df = pd.read_parquet(f"{project_dir}/intermediate/gene_pathway_mapping.parquet").astype(np.int64)
-    print(f"    {gene_pathway_df.shape[0]} genes, {gene_pathway_df.shape[1]} pathways")
+    # snps are rows (named in 'ID'), genes are the other columns
+    snp_gene_df = pl.read_parquet(f"{project_dir}/intermediate/snp_gene_mapping.parquet")
+    snp_ids = snp_gene_df['ID']
+    sg_genes = [c for c in snp_gene_df.columns if c != 'ID']
+    print(f"    {len(snp_ids)} SNPs, {len(sg_genes)} genes")
+
+    # genes are rows (named in 'genes'), pathways are the other columns
+    gene_pathway_df = pl.read_parquet(f"{project_dir}/intermediate/gene_pathway_mapping.parquet")
+    gp_genes = gene_pathway_df['genes'].to_numpy()
+    pathways = [c for c in gene_pathway_df.columns if c != 'genes']
+    print(f"    {len(gp_genes)} genes, {len(pathways)} pathways")
 
     # keep genes that are in both snp-gene and gene-pathway matrices
-    keep_genes = np.intersect1d(gene_pathway_df.index, snp_gene_df.columns)
+    keep_genes = np.intersect1d(gp_genes, sg_genes)
     print(f"    {len(keep_genes)} overlapping genes in both snp-gene and gene-pathway matrices")
-    tmp_sgm = snp_gene_df.loc[:, keep_genes]
-    tmp_gpm = gene_pathway_df.loc[keep_genes, :]
+    gp_row = {gene: i for i, gene in enumerate(gp_genes)}
+    tmp_sgm = snp_gene_df.select(keep_genes.tolist()).to_numpy()
+    tmp_gpm = gene_pathway_df.select(pathways).to_numpy()[[gp_row[g] for g in keep_genes]]
 
-    # make snp-pathway matrix with dot product of sparse arrays (near instant computation)
-    sg_sparse = csr_array(tmp_sgm.to_numpy(), dtype=np.int64)
-    gp_sparse = csr_array(tmp_gpm.to_numpy(), dtype=np.int64)
-    tmp_sgp = sg_sparse.dot(gp_sparse).todense()  # type: ignore
+    # make snp-pathway matrix with dot product of sparse arrays (near instant computation),
+    # bool values converted to int64 for the matrix multiplication
+    sg_sparse = csr_array(tmp_sgm, dtype=np.int64)
+    gp_sparse = csr_array(tmp_gpm, dtype=np.int64)
+    tmp_sgp = sg_sparse.dot(gp_sparse).toarray()  # type: ignore
 
     # after matrix multiplication (dot product) there will be values greater than 1
     # set data type to bool and then back to int
-    snp_pathway_df = pd.DataFrame(tmp_sgp.astype(bool).astype(int),
-                                index=pd.Series(tmp_sgm.index, name='varid'),
-                                columns=pd.Series(tmp_gpm.columns, name='pathway'))
-    print(f"    {snp_pathway_df.shape[0]} SNPs, {snp_pathway_df.shape[1]} pathways")
-    snp_pathway_df.to_parquet(output_file, index=True, compression='zstd', engine='pyarrow')
+    snp_pathway_df = pl.from_numpy(tmp_sgp.astype(bool).astype(np.int64), schema=pathways, orient='row')
+    snp_pathway_df.insert_column(0, snp_ids.alias('varid'))
+    print(f"    {len(snp_ids)} SNPs, {len(pathways)} pathways")
+    snp_pathway_df.write_parquet(output_file, compression='zstd')
 
 
 def _bpm_row(snp_pathway_np, i):
@@ -378,37 +398,37 @@ def pathway_indices(project_dir, min_path, n_workers, output_file):
             a BPM parquet file.
     """
 
-    # Reading in data files
-    snp_pathway_df = pd.read_parquet(f"{project_dir}/intermediate/snp_pathway_mapping.parquet")
-    pathways = snp_pathway_df.sum(axis=0)
+    # Reading in data files: snps are rows (named in 'varid'), pathways are the other columns
+    snp_pathway_df = pl.read_parquet(f"{project_dir}/intermediate/snp_pathway_mapping.parquet").drop('varid')
+    pathway_names = snp_pathway_df.columns
     snp_pathway_np = snp_pathway_df.to_numpy()
-    pathways_np = pathways.to_numpy()
-    len_columns = len(snp_pathway_df.columns)
+    pathways_np = snp_pathway_np.sum(axis=0)
+    len_columns = len(pathway_names)
 
     # Finding WPM indices
     WPMind = [ np.nonzero(snp_pathway_np[:, i])[0] for i in range(len_columns) ]
-    wpm = pd.DataFrame({
-        'pathway': pathways.index,
-        'indsize': pathways.values,
-        'ind': WPMind,
+    wpm = pl.DataFrame({
+        'pathway': pathway_names,
+        'indsize': pathways_np,
+        'ind': pl.Series(WPMind, dtype=pl.List(pl.Int64)),
         'size': pathways_np * pathways_np - pathways_np,
         })
-    
+
     # filter out pathways that are too small given the available SNPs in the WPM
-    wpm = wpm[(wpm['indsize'] >= min_path)].reset_index(drop=True)
-    print(f"    Total WPMs after filtering with min_path={min_path}: {len(wpm):,} / {len(pathways):,}")
-    wpm.to_parquet(f"{output_file}-wpm.parquet", index=True, compression='zstd', engine='pyarrow')
+    wpm = wpm.filter(pl.col('indsize') >= min_path)
+    print(f"    Total WPMs after filtering with min_path={min_path}: {len(wpm):,} / {len_columns:,}")
+    wpm.write_parquet(f"{output_file}-wpm.parquet", compression='zstd')
 
     # Finding all possible combinations of pairs for pathway names and sizes.
     # combnames = np.array(list(combinations(wpm['pathway'], 2)))
-    combnames = np.array(list(combinations(pathways.index, 2)))
+    combnames = np.array(list(combinations(pathway_names, 2)))
     
     # Finding BPM indices: one task per pathway i covers all pairs (i, j > i).
     # Parallel returns results in input order, so the flattened lists line up with combnames.
     if n_workers is None:
         n_workers = -1
     rows = Parallel(n_jobs=n_workers)(
-        delayed(_bpm_row)(snp_pathway_np, i) for i in range(len(pathways))
+        delayed(_bpm_row)(snp_pathway_np, i) for i in range(len_columns)
     )
     BPMind1, BPMind2, ind1size, ind2size = [], [], [], []
     for flat1, flat2, row_ind1size, row_ind2size in rows:  # type: ignore
@@ -422,14 +442,18 @@ def pathway_indices(project_dir, min_path, n_workers, output_file):
         ind2size.extend(row_ind2size.tolist())
 
     # Orienting bpm data and converting to dataframes.
-    bpm = pd.DataFrame({
-        'path1names': combnames[:, 0], 'ind1': BPMind1, 'ind1size': ind1size,
-        'path2names': combnames[:, 1], 'ind2': BPMind2, 'ind2size': ind2size,
+    bpm = pl.DataFrame({
+        'path1names': combnames[:, 0],
+        'ind1': pl.Series(BPMind1, dtype=pl.List(pl.Int64)),
+        'ind1size': pl.Series(ind1size, dtype=pl.Int64),
+        'path2names': combnames[:, 1],
+        'ind2': pl.Series(BPMind2, dtype=pl.List(pl.Int64)),
+        'ind2size': pl.Series(ind2size, dtype=pl.Int64),
         'size': np.array(ind1size) * np.array(ind2size),  # Getting BPM sizes by multiplying combination available pairs.
         })
 
     # filter out pathways that are too small after removing SNPs that are in both pathways of a BPM
-    bpm = bpm[(bpm['ind1size'] >= min_path) & (bpm['ind2size'] >= min_path)].reset_index(drop=True)
+    bpm = bpm.filter((pl.col('ind1size') >= min_path) & (pl.col('ind2size') >= min_path))
     print(f"    Total BPMs after filtering with min_path={min_path}: {len(bpm):,} / {len(combnames):,}")
-    bpm.to_parquet(f"{output_file}-bpm.parquet", index=True, compression='zstd', engine='pyarrow')
+    bpm.write_parquet(f"{output_file}-bpm.parquet", compression='zstd')
 

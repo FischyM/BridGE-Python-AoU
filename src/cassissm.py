@@ -1,9 +1,9 @@
 import pickle, sys
 
 import numpy as np
-import pandas as pd
 
 from classes import InteractionNetwork
+from polars_io import read_whitespace
 
 
 # Pyhthon script for converting CSSI output to Python interaction networks.
@@ -26,15 +26,15 @@ gittype = sys.argv[3]
 outputfile = sys.argv[4]
 
 # load CASSI interaction file
-ssm_cassi = pd.read_csv(cassifile, sep=r'\s+')
+ssm_cassi = read_whitespace(cassifile)
 
 # load bim file
-bim = pd.read_csv(plinkbimfile, sep=r'\s+', engine='python', header=None)
+bim = read_whitespace(plinkbimfile, has_header=False)
 # number of SNPs
 p = bim.shape[0]
 
-x = ssm_cassi['SNP1'] - 1
-y = ssm_cassi['SNP2'] - 1
+x = ssm_cassi['SNP1'].to_numpy() - 1
+y = ssm_cassi['SNP2'].to_numpy() - 1
 ssm_pro = np.zeros((p,p))
 ssm_risk = np.zeros((p,p))
 
@@ -42,8 +42,8 @@ ssm_risk = np.zeros((p,p))
 # if else, now for lr
 if gittype == 'lr':
 	# logistic regression (cassi)
-	z = -np.log10(ssm_cassi['LR_P'])
-	log_or = ssm_cassi['LR_LOG_OR']
+	z = -np.log10(ssm_cassi['LR_P'].to_numpy())
+	log_or = ssm_cassi['LR_LOG_OR'].to_numpy()
 	for i in range(x.shape[0]):
 		s1 = x[i]
 		s2 = y[i]
@@ -53,8 +53,8 @@ if gittype == 'lr':
 			ssm_risk[s1,s2] = z[i]
 elif gittype == 'lin':
 	# Linear Regression
-	z = -np.log10(ssm_cassi['LIN_P'])
-	lin_beta = ssm_cassi['LIN_BETA']
+	z = -np.log10(ssm_cassi['LIN_P'].to_numpy())
+	lin_beta = ssm_cassi['LIN_BETA'].to_numpy()
 	for i in range(x.shape[0]):
 		s1 = x[i]
 		s2 = y[i]
@@ -64,9 +64,9 @@ elif gittype == 'lin':
 			ssm_risk[s1,s2] = z[i]
 elif gittype == 'je':
 	# joint effect (cassi)
-	z = -np.log10(ssm_cassi['JE_CC_P'])
-	case_log_or = ssm_cassi['JE_CASE_LOG_OR']
-	ctrl_log_or = ssm_cassi['JE_CTRL_LOG_OR']
+	z = -np.log10(ssm_cassi['JE_CC_P'].to_numpy())
+	case_log_or = ssm_cassi['JE_CASE_LOG_OR'].to_numpy()
+	ctrl_log_or = ssm_cassi['JE_CTRL_LOG_OR'].to_numpy()
 	for i in range(x.shape[0]):
 		s1 = x[i]
 		s2 = y[i]
@@ -76,9 +76,9 @@ elif gittype == 'je':
 			ssm_risk[s1,s2] = z[i]
 elif gittype == 'awu':
 	# Adjusted Wu
-	z = -np.log10(ssm_cassi['AWU_CC_P'])
-	case_log_or = ssm_cassi['AWU_CASE_LOG_OR']
-	ctrl_log_or = ssm_cassi['AWU_CTRL_LOG_OR']
+	z = -np.log10(ssm_cassi['AWU_CC_P'].to_numpy())
+	case_log_or = ssm_cassi['AWU_CASE_LOG_OR'].to_numpy()
+	ctrl_log_or = ssm_cassi['AWU_CTRL_LOG_OR'].to_numpy()
 	for i in range(x.shape[0]):
 		s1 = x[i]
 		s2 = y[i]
@@ -88,9 +88,9 @@ elif gittype == 'awu':
 			ssm_risk[s1,s2] = z[i]
 elif gittype == 'afe':
 	# Adjusted Fast Epistasis
-	z = -np.log10(ssm_cassi['AFE_CC_P'])
-	case_log_or = ssm_cassi['AFE_CASE_LOG_OR']
-	ctrl_log_or = ssm_cassi['AFE_CTRL_LOG_OR']
+	z = -np.log10(ssm_cassi['AFE_CC_P'].to_numpy())
+	case_log_or = ssm_cassi['AFE_CASE_LOG_OR'].to_numpy()
+	ctrl_log_or = ssm_cassi['AFE_CTRL_LOG_OR'].to_numpy()
 	for i in range(x.shape[0]):
 		s1 = x[i]
 		s2 = y[i]
@@ -100,9 +100,9 @@ elif gittype == 'afe':
 			ssm_risk[s1,s2] = z[i]
 elif gittype == 'wz':
 	# Wellek Ziegler
-	z = -np.log10(ssm_cassi['WZ_CC_P'])
-	case_r = ssm_cassi['WZ_CASE_R']
-	ctrl_r = ssm_cassi['WZ_CTRL_R']
+	z = -np.log10(ssm_cassi['WZ_CC_P'].to_numpy())
+	case_r = ssm_cassi['WZ_CASE_R'].to_numpy()
+	ctrl_r = ssm_cassi['WZ_CTRL_R'].to_numpy()
 	for i in range(x.shape[0]):
 		s1 = x[i]
 		s2 = y[i]

@@ -3,10 +3,11 @@ from datetime import datetime
 from os import path
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from scipy.sparse import coo_array, csr_array
 
 from src import hyge_cache as hc
+from src.polars_io import read_whitespace
 
 # dtype of the genotype matrices and pair counts in run_single. All counts are whole numbers
 # no larger than the number of samples, so float32 is exact below 2**24 (~16.7M) samples,
@@ -30,12 +31,13 @@ def run_pheno_perm(rng, cluster_file, pheno, iid):
         phenonew (np.ndarray): permuted phenotypes, same order as `pheno`
     """
     # load cluster file
-    cluster_data = pd.read_csv(cluster_file, sep=r"\s+", comment="#", dtype={'IID': str})
-    if not cluster_data['IID'].is_unique:
+    cluster_data = read_whitespace(cluster_file, comment_prefix="#", schema_overrides={'IID': pl.String})
+    if cluster_data['IID'].n_unique() != cluster_data.height:
         sys.exit(f"duplicate IIDs in {cluster_file}")
 
     # align cluster file rows to the snp_data order: row i of the result is sample iid[i]
-    idx = pd.Index(cluster_data['IID']).get_indexer(iid)
+    row = {sample: i for i, sample in enumerate(cluster_data['IID'])}
+    idx = pl.Series(iid).replace_strict(row, default=-1, return_dtype=pl.Int64).to_numpy()
     if (idx < 0).any():
         sys.exit(f"{(idx < 0).sum()} sample(s) in snp_data.npz absent from {cluster_file}, "
                  f"e.g. {iid[idx < 0][0]}")

@@ -1,7 +1,9 @@
 import numpy as np
-import pandas as pd
+import polars as pl
 from scipy.sparse import csr_array, load_npz
 from scipy.stats import hypergeom
+
+from src.polars_io import list_column, to_workbook
 
 
 np.seterr(divide='ignore', invalid='ignore')
@@ -97,6 +99,12 @@ def _driver_string(snps, genes, snp_mean_gi, snp_mean_gi_bg, n_bg, n_other, in_i
                               gi_fold[keep].tolist(), gi_hyge_log[keep].tolist()))
 
 
+def _driver_frame(name, drivers, path_index):
+    """Driver strings keyed by global module index; empty when this module type was not run."""
+    return pl.DataFrame({'module': path_index if drivers else [], name: drivers},
+                        schema={'module': pl.Int64, name: pl.String})
+
+
 def load_sparse_array(path):
     with np.load(path) as f:
         names = {k.split("__")[0] for k in f.files}
@@ -114,9 +122,9 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
         snp_int_file (str): Interaction network .npz (sparse arrays).
         model (str): The model used for the analysis.
         n (int): Number of BPMs/WPMs supplied.
-        path1 (DataFrame): One column, pathway-1 name per module.
-        path2 (DataFrame): One column, pathway-2 name per module. Same as path1 for WPMs.
-        effects (DataFrame): One column of 'risk'/'protective' per module.
+        path1 (array-like): Pathway-1 name per module.
+        path2 (array-like): Pathway-2 name per module. Same as path1 for WPMs.
+        effects (array-like): 'risk'/'protective' per module.
         path_ids (dict): Pathway name to its index in the dataset, built by collectresults.
         fdrcutoff (float): FDR threshold, used only to name the output file.
         imported_ssm (bool): True when the network was imported rather than
@@ -126,18 +134,18 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
 
     Returns:
         list: [bpm_path1_drivers, bpm_path2_drivers, wpm_path_drivers], each a
-            one-column DataFrame indexed by global module index. Only the
-            relevant one or two are populated; the others are empty.
+            DataFrame with columns 'module' (global module index) and the driver
+            string. Only the relevant one or two are populated; the others are empty.
 
     Side effect:
         Writes <project_dir>/results/interaction_list-{bpm,wpm}-<model>-<fdr>.xlsx
     """
     int_network = load_sparse_array(snp_int_file)
 
-    bpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
-    wpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet")
-    gene_pathway_df = pd.read_parquet(f"{project_dir}/intermediate/gene_pathway_mapping.parquet")
-    snp_gene_df = pd.read_parquet(f"{project_dir}/intermediate/snp_gene_mapping.parquet")
+    bpm = pl.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
+    wpm = pl.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet")
+    gene_pathway_df = pl.read_parquet(f"{project_dir}/intermediate/gene_pathway_mapping.parquet")
+    snp_gene_df = pl.read_parquet(f"{project_dir}/intermediate/snp_gene_mapping.parquet")
     
     snp_data = np.load(f"{project_dir}/intermediate/snp_data.npz")
     G = snp_data['data']
@@ -148,8 +156,9 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
 
     # load ld_file
     ld_sparse_csr = load_npz(f"{project_dir}/raw/plink.ld.r2.npz").tocsr()
-    ld_vars = pd.read_csv(f"{project_dir}/raw/plink.ld.r2.vars", names=['varid'], dtype=str)
-    assert np.array_equal(ld_vars['varid'].to_numpy(dtype=str), varid.astype(str))
+    ld_vars = pl.read_csv(f"{project_dir}/raw/plink.ld.r2.vars", has_header=False, new_columns=['varid'],
+                          schema_overrides={'varid': pl.String})
+    assert np.array_equal(ld_vars['varid'].to_numpy().astype(str), varid.astype(str))
 
     # genotype coding, applied per selected column rather than to all of G
     dom_map = np.array([0, 1, 1], dtype=np.int8)  # dominant:  0->0, 1->1, 2->1
@@ -165,26 +174,28 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
         pos_cutoff = np.quantile(int_network['protective'].toarray(), 1 - densitycutoff)
         neg_cutoff = np.quantile(int_network['risk'].toarray(), 1 - densitycutoff)
 
-    # --- pandas -> numpy, once, before the per-module loop -------------------
-    names1 = path1.iloc[:, 0].to_numpy()
-    names2 = path2.iloc[:, 0].to_numpy()
-    effect_arr = effects.iloc[:, 0].to_numpy()
+    names1 = np.asarray(path1)
+    names2 = np.asarray(path2)
+    effect_arr = np.asarray(effects)
 
-    # parquet row labels are 0..n-1, so positional == label lookup.
     # BPM rows are looked up by name: the table holds pairs of all pathways (before
     # the WPM size filter), further filtered by min_path, so there is no closed-form index.
     bpm_row = {pair: r for r, pair in enumerate(zip(bpm['path1names'], bpm['path2names']))}
-    bpm_ind1 = bpm['ind1'].to_numpy()
-    bpm_ind2 = bpm['ind2'].to_numpy()
-    wpm_ind = wpm['ind'].to_numpy()
+    bpm_ind1 = list_column(bpm['ind1'])
+    bpm_ind2 = list_column(bpm['ind2'])
+    wpm_ind = list_column(wpm['ind'])
 
-    gp_matrix = gene_pathway_df.to_numpy() == 1
-    gp_genes = gene_pathway_df.index.to_numpy()
-    gp_col = {name: c for c, name in enumerate(gene_pathway_df.columns)}
+    # genes are rows (named in 'genes'), pathways the other columns
+    gp_pathways = [c for c in gene_pathway_df.columns if c != 'genes']
+    gp_matrix = gene_pathway_df.select(gp_pathways).to_numpy() == 1
+    gp_genes = gene_pathway_df['genes'].to_numpy()
+    gp_col = {name: c for c, name in enumerate(gp_pathways)}
 
-    sg_matrix = snp_gene_df.to_numpy() == 1
-    sg_genes = snp_gene_df.columns.to_numpy()
-    snp_row = {snp: r for r, snp in enumerate(snp_gene_df.index)}
+    # SNPs are rows (named in 'ID'), genes the other columns
+    sg_gene_names = [c for c in snp_gene_df.columns if c != 'ID']
+    sg_matrix = snp_gene_df.select(sg_gene_names).to_numpy() == 1
+    sg_genes = np.array(sg_gene_names, dtype=object)
+    snp_row = {snp: r for r, snp in enumerate(snp_gene_df['ID'])}
     gene_col = {gene: c for c, gene in enumerate(sg_genes)}
 
     pheno_size = pheno.shape[0]
@@ -383,31 +394,28 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
             bpm_path1_drivers.append(path1_drivers)
             bpm_path2_drivers.append(path2_drivers)
 
-    bpm_path1_drivers = pd.DataFrame(bpm_path1_drivers, columns=['bpm_path1_drivers'], index=path_index if bpm_path1_drivers else None)
-    bpm_path2_drivers = pd.DataFrame(bpm_path2_drivers, columns=['bpm_path2_drivers'], index=path_index if bpm_path2_drivers else None)
-    wpm_path_drivers = pd.DataFrame(wpm_path_drivers, columns=['wpm_path_drivers'], index=path_index if wpm_path_drivers else None)
+    bpm_path1_drivers = _driver_frame('bpm_path1_drivers', bpm_path1_drivers, path_index)
+    bpm_path2_drivers = _driver_frame('bpm_path2_drivers', bpm_path2_drivers, path_index)
+    wpm_path_drivers = _driver_frame('wpm_path_drivers', wpm_path_drivers, path_index)
 
     # write interaction list (one DataFrame, built once)
     if pair_tables:
-        interaction_table = pd.DataFrame(
-            {c: np.concatenate([t[c] for t in pair_tables]) for c in TABLE_COLUMNS},
-            columns=TABLE_COLUMNS)
+        interaction_table = pl.DataFrame(
+            {c: np.concatenate([t[c] for t in pair_tables]) for c in TABLE_COLUMNS})
     else:
-        interaction_table = pd.DataFrame(columns=TABLE_COLUMNS)
+        interaction_table = pl.DataFrame(schema=TABLE_COLUMNS)
 
     # remove non-relevant columns if ssm is imported
     if imported_ssm:
-        interaction_table = interaction_table.drop(
-            labels=['OR', 'GI type', 'case frequency', 'control frequency'], axis=1)
+        interaction_table = interaction_table.drop(['OR', 'GI type', 'case frequency', 'control frequency'])
 
     kind = 'wpm' if wpm_flag else 'bpm'
     list_file = f'{project_dir}/results/interaction_list-{kind}-{model}-{fdrcutoff:.2f}.xlsx'
 
-    with pd.ExcelWriter(list_file, engine='openpyxl') as writer:  # iter_cols below is openpyxl API
-        interaction_table.to_excel(writer, index=False, sheet_name='Sheet1')
-        ws = writer.sheets['Sheet1']
-        for col in ws.iter_cols(min_col=12, max_col=16, min_row=2):  # L:P, skip header
-            for cell in col:
-                cell.number_format = '0.000'
+    wb = to_workbook({'Sheet1': interaction_table})
+    for col in wb['Sheet1'].iter_cols(min_col=12, max_col=16, min_row=2):  # L:P, skip header
+        for cell in col:
+            cell.number_format = '0.000'
+    wb.save(list_file)
 
     return [bpm_path1_drivers, bpm_path2_drivers, wpm_path_drivers]

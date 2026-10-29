@@ -1,8 +1,9 @@
 import argparse
+import io
 import sys
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import matplotlib
 
 matplotlib.use('Agg')
@@ -60,9 +61,20 @@ LEGEND_LOC = {
 }
 
 
+def read_whitespace(path, skip_lines=0, **kwargs):
+    """Read a whitespace-delimited table (pandas' sep=r'\\s+'): runs of spaces
+    and tabs are collapsed to one tab, blank lines dropped, and the first
+    skip_lines lines skipped. Types are inferred from every row; other kwargs
+    go to pl.read_csv."""
+    with open(path) as handle:
+        lines = ['\t'.join(line.split()) for line in handle.readlines()[skip_lines:]]
+    return pl.read_csv(io.StringIO('\n'.join(line for line in lines if line)),
+                       separator='\t', infer_schema_length=None, **kwargs)
+
+
 def read_coordinates(path):
     """Read a plink2 .eigenvec, or a legacy plink 1.9 .mds file."""
-    data = pd.read_csv(path, index_col=False, sep=r'\s+')
+    data = read_whitespace(path)
     data.columns = [str(c).lstrip('#') for c in data.columns]
 
     if 'PC1' in data.columns and 'PC2' in data.columns:
@@ -78,7 +90,7 @@ def read_coordinates(path):
     if 'FID' not in data.columns or 'IID' not in data.columns:
         raise SystemExit(f'Cannot find FID/IID columns in {path}')
 
-    return data[['FID', 'IID', xcol, ycol]], xcol, ycol
+    return data.select('FID', 'IID', xcol, ycol), xcol, ycol
 
 
 def read_populations(path):
@@ -90,7 +102,7 @@ def read_populations(path):
     with open(path) as handle:
         pop_names = handle.readline().split()
 
-    data = pd.read_csv(path, header=None, skiprows=1, sep=r'\s+')
+    data = read_whitespace(path, skip_lines=1, has_header=False)
     expected = len(pop_names) + 2
     if data.shape[1] != expected:
         raise SystemExit(
@@ -117,11 +129,11 @@ def draw_points(ax, data, xcol, ycol, pops, colors):
     """
     artists = {}
     for pop in pops:
-        subset = data[data['population'] == pop]
-        if subset.empty:
+        subset = data.filter(pl.col('population') == pop)
+        if subset.is_empty():
             continue
         artists[pop] = ax.scatter(
-            subset[xcol], subset[ycol], marker='+', s=40, linewidths=0.9,
+            subset[xcol].to_numpy(), subset[ycol].to_numpy(), marker='+', s=40, linewidths=0.9,
             color=colors[pop], label=pop,
             zorder=2 if pop == 'StudyPop' else 3)
     return artists
@@ -257,7 +269,7 @@ def plot_density(data, xcol, ycol, plot_order, colors, xlim, ylim,
     artists = draw_points(ax, data, xcol, ycol,
                           [p for p in plot_order if p != 'StudyPop'], colors)
 
-    points = data.loc[data['population'] == 'StudyPop', [xcol, ycol]].to_numpy()
+    points = data.filter(pl.col('population') == 'StudyPop').select(xcol, ycol).to_numpy()
     if len(points) < 3:
         print(f'Density skipped: only {len(points)} study samples',
               file=sys.stderr)
@@ -310,22 +322,23 @@ if __name__ == '__main__':
 
     # FID/IID come from the same plink run on both sides, but read_csv can still
     # infer different dtypes (e.g. all-numeric IDs in one file), so align them
-    for col in ('FID', 'IID'):
-        coords[col] = coords[col].astype(str)
-        pop_id_data[col] = pop_id_data[col].astype(str)
+    coords = coords.with_columns(pl.col('FID', 'IID').cast(pl.String))
+    pop_id_data = pop_id_data.with_columns(pl.col('FID', 'IID').cast(pl.String))
 
-    data = coords.merge(pop_id_data, how='inner', on=['FID', 'IID'])
-    if data.empty:
+    data = coords.join(pop_id_data, how='inner', on=['FID', 'IID'], maintain_order='left')
+    if data.is_empty():
         raise SystemExit(
             f'No samples in common between {eigenvec_file} and {pop_id_file}'
         )
 
-    data['population'] = (data[pop_names] == 1).idxmax(axis=1)
+    # the first population whose one-hot column is 1 (the first population if none is)
+    data = data.with_columns(population=pl.coalesce(
+        [pl.when(pl.col(pop) == 1).then(pl.lit(pop)) for pop in pop_names] + [pl.lit(pop_names[0])]))
 
     # draw the study samples last so they sit on top of the reference clouds,
     # but list them first in the legend
-    study_points = data[data['population'] == 'StudyPop']
-    other_points = data[data['population'] != 'StudyPop']
+    study_points = data.filter(pl.col('population') == 'StudyPop')
+    other_points = data.filter(pl.col('population') != 'StudyPop')
     plot_order = ['StudyPop'] + [p for p in sorted(pop_names) if p != 'StudyPop']
 
     tab10 = plt.get_cmap('tab10').colors

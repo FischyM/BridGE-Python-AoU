@@ -4,9 +4,11 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from scipy.sparse import csr_array, issparse
 from scipy.stats import chi2, norm, rankdata
+
+from src.polars_io import list_column
 
 np.seterr(divide='ignore', invalid='ignore')
 
@@ -595,12 +597,13 @@ def bpm_pathway_ids(bpm, wpm):
         if column not in bpm:
             raise ValueError(f"the BPM table has no '{column}' column, so its pathway pairs "
                              f"cannot be identified; columns present: {list(bpm.columns)}")
-    names = pd.Index(wpm['pathway'].values)
-    if not names.is_unique:
+    names = wpm['pathway']
+    if names.n_unique() != len(names):
         raise ValueError("wpm['pathway'] contains duplicate names, so a BPM's pathways cannot "
                          "be identified unambiguously")
-    idx1 = names.get_indexer(bpm['path1names'].values)
-    idx2 = names.get_indexer(bpm['path2names'].values)
+    position = {name: i for i, name in enumerate(names)}
+    idx1 = bpm['path1names'].replace_strict(position, default=-1, return_dtype=pl.Int64).to_numpy()
+    idx2 = bpm['path2names'].replace_strict(position, default=-1, return_dtype=pl.Int64).to_numpy()
     missing = (idx1 < 0) | (idx2 < 0)
     if missing.any():
         raise ValueError(f"{int(missing.sum()):,} BPM row(s) name a pathway that is not in the "
@@ -613,8 +616,8 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
 
     Args:
         input_network (csr_array): SNP-SNP interaction network
-        bpm (pd.DataFrame): BPM table with columns of pathway SNP indices
-        wpm (pd.DataFrame): WPM table with columns of pathway SNP indices
+        bpm (pl.DataFrame): BPM table with columns of pathway SNP indices
+        wpm (pl.DataFrame): WPM table with columns of pathway SNP indices
         binary_flag (bool): convert input_network to binary (0/1) before computing statistics
         snp_perms (int): number of SNP permutations to perform for empirical p-value estimation
         n_jobs (int): number of sequential chunks to split the big passes into (lower peak RAM)
@@ -631,19 +634,19 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
     mm_scores = as_sparse(input_network)
     s = mm_scores.shape[0]
 
-    bpm_size = bpm['size'].values.shape[0]
-    bpmsize = bpm['size'].values
-    ind1 = [as_index(x) for x in bpm['ind1'].values]
-    ind2 = [as_index(x) for x in bpm['ind2'].values]
-    bpmind1size = bpm['ind1size'].values
-    bpmind2size = bpm['ind2size'].values
+    bpm_size = bpm.height
+    bpmsize = bpm['size'].to_numpy()
+    ind1 = [as_index(x) for x in list_column(bpm['ind1'])]
+    ind2 = [as_index(x) for x in list_column(bpm['ind2'])]
+    bpmind1size = bpm['ind1size'].to_numpy()
+    bpmind2size = bpm['ind2size'].to_numpy()
 
-    wpm_size = wpm['size'].values.shape[0]
-    wpmsize = wpm['size'].values
-    wpmindsize = wpm['indsize'].values
+    wpm_size = wpm.height
+    wpmsize = wpm['size'].to_numpy()
+    wpmindsize = wpm['indsize'].to_numpy()
 
     # pathway SNP lists, and the pathway pair each BPM row refers to
-    path_lists = [as_index(x) for x in wpm['ind'].values]
+    path_lists = [as_index(x) for x in list_column(wpm['ind'])]
     path_lens = np.fromiter((p.size for p in path_lists), dtype=np.int64,
                             count=wpm_size).astype(np.float64)
     pmat = indicator_matrix(path_lists, s)
@@ -1055,8 +1058,8 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
 def run_stats(project_dir, snp_int_file, binary_flag, net_density, snp_perms, n_jobs, n_workers, seed, compressed=False):
     
     # load pathway indices
-    bpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
-    wpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet")
+    bpm = pl.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
+    wpm = pl.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet")
     print(f"    loaded {bpm.shape[0]:,} BPMs and {wpm.shape[0]} WPMs", flush=True)
 
     # load interaction network

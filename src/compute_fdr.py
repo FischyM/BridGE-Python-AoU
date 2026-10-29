@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
+import polars as pl
 
 
 # run_fdr() computes False Discovery Rates for BPM/WPM/PATH modules
@@ -59,7 +59,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 def _frame(values, name):
-    return pd.DataFrame({name: np.asarray(values, dtype=np.float64)})
+    return pl.DataFrame({name: np.asarray(values, dtype=np.float64)})
 
 
 def _stack(data):
@@ -213,7 +213,7 @@ def run_fdr(snp_int_file, pcut, R, compressed=False):
     risk_tmp_file = snp_int_file.with_name(new_risk_name)
     
 
-    # one entry per network, keyed exactly like the original DataFrame columns
+    # one entry per network, keyed exactly like the original's DataFrame columns
     bpm_data, bpm_pv_data = {}, {}
     wpm_data, wpm_pv_data = {}, {}
     path_data, path_pv_data = {}, {}

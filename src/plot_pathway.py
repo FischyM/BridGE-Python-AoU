@@ -1,5 +1,5 @@
 import numpy as np
-import pandas as pd
+import polars as pl
 import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -43,12 +43,12 @@ def _key_layout(pathways):
 def _representatives(groups):
     """Global module index of one module per redundancy group, sorted by group label.
 
-    `groups` is a group-label Series from check_BPM_WPM_redundancy, indexed by
-    global module index and ordered by ascending FDR within each direction, so
+    `groups` is a group-label frame from check_BPM_WPM_redundancy (columns
+    'module' and 'group'), ordered by ascending FDR within each direction, so
     the first occurrence of each label is the lowest-FDR member of its group.
     """
-    first = groups[~groups.duplicated()]
-    return pd.Series(first.index, index=first.to_numpy()).sort_index().to_numpy()
+    first = groups.unique(subset='group', keep='first', maintain_order=True)
+    return first.sort('group')['module'].to_numpy()
 
 
 def _split(i, size):
@@ -89,7 +89,7 @@ def _build_graph(bpm, wpm, BPM_groups, WPM_groups, BPM_fdr, bpm_limit):
     # BPMs touching a WPM pathway take priority, both effect directions.
     wpm_pathways = np.unique([p for p, _, _ in to_draw])
     touching = np.flatnonzero(np.isin(p1_names, wpm_pathways) | np.isin(p2_names, wpm_pathways))
-    significant = BPM_groups.index
+    significant = set(BPM_groups['module'].to_list())
     for pos in touching:
         if pos in significant:
             to_draw.append((p1_names[pos], p2_names[pos], 'protective'))
@@ -100,7 +100,7 @@ def _build_graph(bpm, wpm, BPM_groups, WPM_groups, BPM_fdr, bpm_limit):
     # representative has the lowest FDR, across both effect directions.
     # Ties keep group-label order (protective before risk).
     reps = _representatives(BPM_groups)
-    reps = reps[np.argsort(BPM_fdr.loc[reps].to_numpy(), kind='stable')][:bpm_limit]
+    reps = reps[np.argsort(BPM_fdr[reps], kind='stable')][:bpm_limit]
     for i in reps:
         pos, direction = _split(i, bpm_size)
         to_draw.append((p1_names[pos], p2_names[pos], direction))
@@ -134,11 +134,13 @@ def draw_map(project_dir, fdrcut, output_file, BPM_group_tmp, WPM_group_tmp, PAT
     The group arguments are the per-threshold lists from
     check_BPM_WPM_redundancy; only the last entry (exactly fdrcut) is used.
     PATH_group_tmp is currently unused (see the PATH block in _build_graph).
-    BPM_fdr is a Series of BPM FDRs indexed by global module index (must cover
+    BPM_fdr is an array of BPM FDRs indexed by global module index (must cover
     every module in BPM_group_tmp[-1]); it ranks groups for bpm_limit.
     """
-    bpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
-    wpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet")
+    bpm = pl.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet",
+                          columns=['path1names', 'path2names'])
+    wpm = pl.read_parquet(f"{project_dir}/intermediate/pathway_indices-wpm.parquet",
+                          columns=['pathway'])
 
     G, pathways = _build_graph(bpm, wpm, BPM_group_tmp[-1], WPM_group_tmp[-1], BPM_fdr, bpm_limit)
     if len(pathways) < 3:
