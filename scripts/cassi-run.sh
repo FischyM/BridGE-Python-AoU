@@ -1,4 +1,6 @@
-# This script uses CASSI software to compute SNP-SNP interaction and then converts it to BridGE's interaction format(Pickle file)
+#!/bin/bash
+
+# This script uses CASSI software to compute SNP-SNP interaction and then converts it to BridGE's sparse interaction network format (.npz)
 # Options:
 #       - --plinkFile: input plink file without the extension
 #       - --GI: genetic interaction type, similar to CASSI. Check CASSI for more information.
@@ -7,7 +9,6 @@
 #       - --id: random network number (0 means real network) to be computed. This can be used instead of --nSample for creating only one network.
 # https://www.staff.ncl.ac.uk/richard.howey/cassi/
 
-#!/bin/bash
 
 # parsing parameters
 for i in "$@"; do
@@ -105,14 +106,14 @@ if [ -z "$net_id" ] ; then
         # Step 1, compute SNP-SNP interaction using CASSI
         cassi -i ${infile}.bed  ${th_command} ${pval} -max 0 -o ${project_dir}/${outfile}_R0.txt
         # Step 2, convert SNP-SNP interaction to Python
-        python3 -m cassissm ${infile}.bim  ${project_dir}/${outfile}_R0.txt ${gi} ${project_dir}/${outfile}_R0.pkl
+        python3 -m cassissm ${infile}.bim  ${project_dir}/${outfile}_R0.txt ${gi} ${project_dir}/${outfile}_R0.npz
         for i in `seq 1 $n` ;
         do
                 tmp_seed=$(($seed+$i))
                 plink --bfile $infile --seed $tmp_seed --make-perm-pheno 1 --out ${project_dir}/rand_pheno${i}
                 plink --bfile $infile --pheno ${project_dir}/rand_pheno${i}.pphe --mpheno 1 --make-bed --out ${infile}_R${i}
                 cassi -i ${infile}_R${i}.bed ${th_command} ${pval}  -max 0 -o ${project_dir}/${outfile}_R${i}.txt
-                python3 -m cassissm ${infile}.bim  ${project_dir}/${outfile}_R${i}.txt ${gi} ${project_dir}/${outfile}_R${i}.pkl
+                python3 -m cassissm ${infile}.bim  ${project_dir}/${outfile}_R${i}.txt ${gi} ${project_dir}/${outfile}_R${i}.npz
                 rm ${project_dir}/rand_pheno${i}.pphe
         done
 else
@@ -120,21 +121,14 @@ else
         if [ "$net_id" == "0" ];
         then
                 cassi -i ${infile}.bed  ${th_command} ${pval} -max 0 -o ${project_dir}/${outfile}_R0.txt
-                python3 -m cassissm ${infile}.bim  ${project_dir}/${outfile}_R0.txt ${gi} ${project_dir}/${outfile}_R0.pkl
+                python3 -m cassissm ${infile}.bim  ${project_dir}/${outfile}_R0.txt ${gi} ${project_dir}/${outfile}_R0.npz
         else
                 tmp_seed=$(($seed+$net_id))
                 plink --bfile $infile --seed $tmp_seed --make-perm-pheno 1 --out ${project_dir}/rand_pheno${net_id}
                 plink --bfile $infile --pheno ${project_dir}/rand_pheno${net_id}.pphe --mpheno 1 --make-bed --out ${infile}_R${net_id}
                 cassi -i ${infile}_R${net_id}.bed ${th_command} ${pval}  -max 0 -o ${project_dir}/${outfile}_R${net_id}.txt
-                python3 -m cassissm ${infile}.bim  ${project_dir}/${outfile}_R${net_id}.txt ${gi} ${project_dir}/${outfile}_R${net_id}.pkl
+                python3 -m cassissm ${infile}.bim  ${project_dir}/${outfile}_R${net_id}.txt ${gi} ${project_dir}/${outfile}_R${net_id}.npz
                 rm ${project_dir}/rand_pheno${net_id}.pphe
         fi
 
 fi
-
-
-
-
-
-
-
