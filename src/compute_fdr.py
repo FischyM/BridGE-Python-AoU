@@ -4,17 +4,18 @@ import numpy as np
 import pandas as pd
 
 
-# fdrsampleperm() computes False Discovery Rates for BPM/WPM/PATH modules
+# run_fdr() computes False Discovery Rates for BPM/WPM/PATH modules
 #
 # INPUTS:
-#   ssmFile: Interaction networks file(path to file) in the pickle format.
-#   BPMindFile: file containing SNP ids for BPM/WPMs in pickle format.
-#   pcut: p-value cutoff for BPM/WPM/PATH to be considered significant and to be in FDR computing process
-#   minPath: minimum size for a pathway to be considered as WPM and in BPM.
-#   N: Number of random networks
+#   snp_int_file: real-network interaction file (.npz, -R0); the pathway_stats-{prot,risk}-*-R<i>.npz
+#       files for the real and random networks are found next to it.
+#   pcut: p-value cutoff for BPM/WPM/PATH to be considered significant and to be in FDR computing
+#       process. Applied to all three; the original hard-coded 0.05 for WPM and PATH.
+#   R: Number of random networks
 #
 # OUTPUTS:
-#   results_<ssmFile without extension>.pkl - This pickle file contains a fdrresultclass class with fields:
+#   results-<model>-R0.npz - one (2 * n_modules, 1) array per field, rows in pathway_indices
+#   order (protective, then risk):
 #       - bpm_pv: empirical p-values for BPMs
 #       - wpm_pv: empirical p-values for WPMs
 #       - path_pv: empirical p-values for PATHs

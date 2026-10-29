@@ -170,9 +170,10 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
     names2 = path2.iloc[:, 0].to_numpy()
     effect_arr = effects.iloc[:, 0].to_numpy()
 
-    # parquet row labels are 0..n-1, so positional == label lookup
-    pathway_size = wpm.shape[0]
-    n_pairs = int(pathway_size * (pathway_size - 1) / 2)
+    # parquet row labels are 0..n-1, so positional == label lookup.
+    # BPM rows are looked up by name: the table holds pairs of all pathways (before
+    # the WPM size filter), further filtered by min_path, so there is no closed-form index.
+    bpm_row = {pair: r for r, pair in enumerate(zip(bpm['path1names'], bpm['path2names']))}
     bpm_ind1 = bpm['ind1'].to_numpy()
     bpm_ind2 = bpm['ind2'].to_numpy()
     wpm_ind = wpm['ind'].to_numpy()
@@ -212,24 +213,27 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
             max_id = int_network.get('risk_max_id')
             score_cutoff = neg_cutoff
 
-        # find pathway index in wpm and find snp ids
-        p_id1 = path_ids[pathname1]
-        p_id2 = path_ids[pathname2]
-        if p_id2 < p_id1:
-            p_id1, p_id2 = p_id2, p_id1
-
-        if p_id1 == p_id2:
+        # find the module's row in wpm/bpm and its snp ids
+        is_wpm = pathname1 == pathname2
+        if is_wpm:
             wpm_flag = True
-            ind1 = wpm_ind[p_id1]
+            p_id = path_ids[pathname1]
+            ind1 = wpm_ind[p_id]
             ind2 = ind1
             rem = 0 if effect == 'protective' else wpm.shape[0]
-            path_index.append(p_id1 + rem)
+            path_index.append(p_id + rem)
         else:
-            bpm_id = int(n_pairs - (pathway_size - p_id1) * (pathway_size - p_id1 - 1) / 2 + p_id2 - p_id1 - 1)
+            if (pathname1, pathname2) in bpm_row:
+                bpm_id = bpm_row[(pathname1, pathname2)]
+                ind1 = bpm_ind1[bpm_id]
+                ind2 = bpm_ind2[bpm_id]
+            else:
+                # stored the other way round: swap so ind1 stays with pathname1
+                bpm_id = bpm_row[(pathname2, pathname1)]
+                ind1 = bpm_ind2[bpm_id]
+                ind2 = bpm_ind1[bpm_id]
             rem = 0 if effect == 'protective' else bpm.shape[0]
             path_index.append(bpm_id + rem)
-            ind1 = bpm_ind1[bpm_id]
-            ind2 = bpm_ind2[bpm_id]
 
         ind1 = np.asarray(ind1, dtype=np.intp)
         ind2 = np.asarray(ind2, dtype=np.intp)
@@ -242,7 +246,7 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
         ind1_gp = gp_genes[gp_matrix[:, gp_col[pathname1]]]
         ind2_gp = gp_genes[gp_matrix[:, gp_col[pathname2]]]
         ind1_gene = _snp_genes(ind1_snp, ind1_gp, sg_matrix, sg_genes, snp_row, gene_col)
-        if p_id1 == p_id2:
+        if is_wpm:
             ind2_gene = ind1_gene
         else:
             ind2_gene = _snp_genes(ind2_snp, ind2_gp, sg_matrix, sg_genes, snp_row, gene_col)
@@ -253,7 +257,7 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
             m_id = max_id[ind1][:, ind2].toarray()  # type: ignore
 
         # For a WPM both sides are the same pathway, so only one triangle counts.
-        tmp_dis = np.tril(ssm_dis) if p_id1 == p_id2 else ssm_dis
+        tmp_dis = np.tril(ssm_dis) if is_wpm else ssm_dis
 
         bin_int_index = np.argwhere(tmp_dis > score_cutoff)
         i = bin_int_index[:, 0]
@@ -335,13 +339,19 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
         pair_tables.append({
             'path1': np.full(interaction_pairs, pathname1, dtype=object),
             'path2': np.full(interaction_pairs, pathname2, dtype=object),
-            'snp1': ind1_snp[i][order], 'chr1': chr1[order],
-            'loc1': np.array(pos1, dtype=object)[order], 'gene1': ind1_gene[i][order],
-            'snp2': ind2_snp[j][order], 'chr2': chr2[order],
-            'loc2': np.array(pos2, dtype=object)[order], 'gene2': ind2_gene[j][order],
+            'snp1': ind1_snp[i][order],
+            'chr1': chr1[order],
+            'loc1': np.array(pos1, dtype=object)[order],
+            'gene1': ind1_gene[i][order],
+            'snp2': ind2_snp[j][order],
+            'chr2': chr2[order],
+            'loc2': np.array(pos2, dtype=object)[order],
+            'gene2': ind2_gene[j][order],
             'GI type': gt_type[order],
-            'case frequency': freq_case[order], 'control frequency': freq_control[order],
-            'GI': GI[order], 'OR': odds_ratio[order],
+            'case frequency': freq_case[order],
+            'control frequency': freq_control[order],
+            'GI': GI[order],
+            'OR': odds_ratio[order],
             'effect': np.full(interaction_pairs, effect, dtype=object),
             'LD': ld[order]})
 
@@ -356,11 +366,11 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
             n_bg=ssm.shape[1], n_other=ind2.shape[0],
             in_int=in_int1, all_int=all_int1)
 
-        if p_id1 == p_id2:
+        if is_wpm:
             wpm_path_drivers.append(path1_drivers)
         else:
             # snp_mean_gi_bg sums over rows of ssm while all_int sums over columns.
-            # These agree only if ssm is symmetric; worth confirming.
+            # These agree only if ssm is symmetric
             in_int2 = np.sum(hits, axis=0)
             path2_drivers = _driver_string(
                 snps=ind2_snp, genes=ind2_gene,

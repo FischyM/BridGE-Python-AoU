@@ -1,5 +1,3 @@
-import math
-
 import numpy as np
 import pandas as pd
 
@@ -111,9 +109,8 @@ def _greedy_groups(fdrs, similar):
     return pd.Series(labels, index=fdrs.index[rank])
 
 def _bpm_similar(bpm, local_ind):
-    # local_ind holds row POSITIONS in bpmind.bpm, not index labels: the FDR
-    # frames are laid out in the row order of bpmind.bpm, whose index can have
-    # gaps (pathway pairs dropped upstream). Label lookup would KeyError.
+    # local_ind holds row positions in pathway_indices-bpm.parquet, the row order
+    # the FDR frames are laid out in.
     ind1 = bpm['ind1'].iloc[local_ind]
     ind2 = bpm['ind2'].iloc[local_ind]
     return bpmsim(ind1, ind2, ind1, ind2) >= SIM_CUTOFF
@@ -160,12 +157,14 @@ def check_BPM_WPM_redundancy(project_dir, fdrBPM, fdrWPM, fdrPATH, FDRcut):
     """Groups redundant BPMs/WPMs/PATHs at every 0.05 FDR threshold up to FDRcut.
 
     Args:
-        fdrBPM (DataFrame): single FDR column 'bpm2'. Protective modules are the
-            first half of the rows, risk modules the second half.
-        fdrWPM (DataFrame): as above, column 'wpm2'.
-        fdrPATH (DataFrame): as above, column 'path2'.
-        bpmindfile (str): pickle with the SNP ids for each BPM/WPM.
-        FDRcut (float): highest FDR threshold to group at.
+        project_dir (str): Path to the project directory; the SNP indices for each
+            BPM/WPM are read from intermediate/pathway_indices-{bpm,wpm}.parquet.
+        fdrBPM (DataFrame): single FDR column 'fdrbpm2', indexed by global module
+            index: protective modules 0..n_bpm-1, risk modules n_bpm..2*n_bpm-1.
+            May be pre-filtered to the significant modules.
+        fdrWPM (DataFrame): as above, column 'fdrwpm2'.
+        fdrPATH (DataFrame): as above, column 'fdrpath2'.
+        FDRcut (float): highest FDR threshold to group at; a multiple of 0.05.
 
     Returns:
         tuple: six lists, each with one entry per 0.05 threshold from 0.05 up to
@@ -187,7 +186,8 @@ def check_BPM_WPM_redundancy(project_dir, fdrBPM, fdrWPM, fdrPATH, FDRcut):
     WPM_group, WPM_nosig_noRD = [], []
     PATH_group, PATH_nosig_noRD = [], []
 
-    for level in range(1, math.ceil(FDRcut / FDR_STEP) + 1):
+    # round, as collect_results._fdr_levels does, so the level count always matches its header
+    for level in range(1, round(FDRcut / FDR_STEP) + 1):
         fdrcut = level * FDR_STEP
 
         labels, n_groups = _groups_at_threshold(fdrBPM, 'fdrbpm2', n_bpm, fdrcut, bpm, _bpm_similar)

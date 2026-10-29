@@ -25,10 +25,10 @@ def _reorder(frame, order):
 
 
 def _fdr_levels(fdrcut):
-    """Number of FDR_STEP thresholds in fdrcut, which must be a multiple of it."""
+    """Number of FDR_STEP thresholds in fdrcut, which must be a positive multiple of it."""
     levels = fdrcut / FDR_STEP
-    if abs(levels - round(levels)) > 1e-9:
-        raise ValueError(f'fdrcut must be a multiple of {FDR_STEP}, got {fdrcut}.')
+    if abs(levels - round(levels)) > 1e-9 or round(levels) < 1:
+        raise ValueError(f'fdrcut must be a positive multiple of {FDR_STEP}, got {fdrcut}.')
     return int(round(levels))
 
 
@@ -64,7 +64,7 @@ def run_results(project_dir, snp_int_file, model, fdrcut, imported_ssm, densityc
 
     Args:
         project_dir (str): Path to the project directory.
-        snp_int_file (str): Path to the real-network interaction file (pickle).
+        snp_int_file (str): Path to the real-network interaction file (.npz).
         model (str): Model name, e.g. "combined".
         fdrcut (float): FDR threshold for keeping modules. Must be a multiple of 0.05.
         imported_ssm (bool): True when the interaction network was imported rather than computed from genotypes.
@@ -78,6 +78,8 @@ def run_results(project_dir, snp_int_file, model, fdrcut, imported_ssm, densityc
               modules below fdrcut with their stats and driver genes.
     """
     snp_int_file = Path(snp_int_file)
+    # validate up front: redundancy grouping and the map need at least one FDR level
+    n_levels = _fdr_levels(fdrcut)
 
     output_file = Path(f"{project_dir}/results/output-{'-'.join(snp_int_file.stem.split('-')[-2:])}.xlsx")
 
@@ -112,8 +114,7 @@ def run_results(project_dir, snp_int_file, model, fdrcut, imported_ssm, densityc
         path_ranksum = pd.DataFrame(results['path_ranksum'], columns=['path_ranksum']).loc[ind_path.index]
 
     # --- pathway names, sizes, effect direction, driver genes ---------------
-    # snppathwayfile is not read here: bridge.py checks it exists and
-    # get_interaction_pair loads it (and the geneset it points at) itself.
+    # get_interaction_pair loads the snp/gene/pathway mappings itself.
     if not (ind_bpm.empty and ind_wpm.empty and ind_path.empty):
         print(f"    Finding driver SNP pairs for significant BPMs/WPMs")
         bpm = pd.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
@@ -177,7 +178,7 @@ def run_results(project_dir, snp_int_file, model, fdrcut, imported_ssm, densityc
             fdrPATH=fdrPATH,
             FDRcut=fdrcut,
             )
-    print(f"    Found {len(BPM_nosig_noRD)} non-redundant BPMs, {len(WPM_nosig_noRD)} non-redundant WPMs, and {len(PATH_nosig_noRD)} non-redundant PATHs below FDR {fdrcut}.")
+    print(f"    Found {BPM_nosig_noRD[-1]} non-redundant BPMs, {WPM_nosig_noRD[-1]} non-redundant WPMs, and {PATH_nosig_noRD[-1]} non-redundant PATHs below FDR {fdrcut}.")
 
     path_plot.draw_map(project_dir, fdrcut, output_file, BPM_groups, WPM_groups, PATH_groups, fdrBPM['fdrbpm2'])
 
@@ -241,8 +242,7 @@ def run_results(project_dir, snp_int_file, model, fdrcut, imported_ssm, densityc
                         ascending=[True, True, False]).reset_index(drop=True)
 
     # --- summary sheets -----------------------------------------------------
-    n_levels = _fdr_levels(fdrcut)
-    header = ['minfdr'] + [ f'fdr{int(round(k * FDR_STEP * 100)):02d}' for k in range(1, n_levels + 1) ]
+    header =['minfdr'] + [ f'fdr{int(round(k * FDR_STEP * 100)):02d}' for k in range(1, n_levels + 1) ]
 
     # One row per module type with results. PATH is checked on its own; the
     # original gated both the WPM and PATH rows on WPM being non-empty.
@@ -275,3 +275,5 @@ def run_results(project_dir, snp_int_file, model, fdrcut, imported_ssm, densityc
             if table is not None:
                 print(f"    Writing {name} with {len(table)} rows")
                 table.to_excel(writer, sheet_name=name)
+
+    return str(output_file)
