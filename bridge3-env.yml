@@ -1,0 +1,25 @@
+name: bridge3
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - ipykernel
+  - joblib
+  - jupyterlab
+  - matplotlib
+  - networkx
+  - numba
+  - numpy
+  - openpyxl
+  - pgenlib
+  - pip
+  - polars
+  - pyarrow
+  - python=3.13
+  - scikit-learn
+  - scipy
+  - seaborn
+  - threadpoolctl
+  - zstd
+
+prefix: "/projects/standard/myersc/shared/fisch872/.conda/envs/bridge3"

@@ -37,7 +37,7 @@ Once Miniforge is installed, clone this repository and install the python enviro
 ```bash
 git clone https://github.com/FischyM/BridGE-Python-AoU.git
 cd BridGE-Python-AoU
-mamba env create -f environment.yml
+mamba env create -f bridge3-env.yml
 ```
 
 ## Running the example data
@@ -51,7 +51,7 @@ Download and set up example data
 cd BridGE-Python-AoU
 
 # activate BridGE environment that was installed as described above and run the setup script
-mamba activate bridge
+mamba activate bridge3
 # the setup.sh script must be run for every new session when running a BridGE analysis.
 source setup.sh  
 
@@ -74,6 +74,25 @@ wget https://zenodo.org/records/23769209/files/allpopid.txt -P example/raw/
 Preprocess example data
 
 ```bash
+# check the study population against 1000 Genomes reference populations.
+# writes example/intermediate/gwas_subset_prj1000.{eigenvec,eigenval,popid.txt,pdf}
+check_population.sh \
+    example/raw/gwas_subset.hg38 \
+    example/raw/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid \
+    example/raw/allpopid.txt \
+    example/preprocess/gwas_subset.prj1000
+
+# drop samples that sit outside the intended cluster. The four cutoffs bound
+# PC1 then PC2 and are read off example/intermediate/gwas_subset_prj1000.pdf;
+# adjust it for your own data.
+remove_outlier.sh \
+    example/raw/gwas_subset.hg38 \
+    example/preprocess/gwas_subset.prj1000.eigenvec \
+    example/preprocess/gwas_subset.hg38.rmoutlier \
+    0.07 0.12 0.10 0.15
+
+# Preprocess the data to remove related samples, match cases to controls, and prune SNPs for LD.
+preprocess.sh example/preprocess/gwas_subset.hg38.rmoutlier example/raw/gwas_final example/raw/glist-hg38-50000.bed
 ```
 
 Run BridGE analysis
@@ -81,7 +100,7 @@ Run BridGE analysis
 ```bash
 python bridge.py --projectDir=example --module=DataProcess --plinkFile=gwas_final --geneAnnotation=glist-hg38-50000.bed --geneSets=c2.cp.v2026.1.Hs --simMeasure=either --jaccardCutoff=0.5 --overlapCutoff=0.5 --nWorker=30
 python bridge.py --projectDir=example --module=ComputeInteraction --model=combined --nWorker=30 --nJobs=4 --seed=42 --R=10
-python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=30 --nJobs=4 --snpPerms=10000 --seed=42 --R=10
+python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=30 --nJobs=1 --snpPerms=10000 --seed=42 --R=10
 python bridge.py --projectDir=example --module=ComputeFDR --model=combined --pvalueCutoff=0.05 --R=10
 python bridge.py --projectDir=example --module=Summarize --model=combined --fdrCutoff=0.25
 # 314 samples, 45610 SNPs, 949 pathways
