@@ -47,7 +47,7 @@ For those familiar with BridGE, here are all the commands to run a BridGE analys
 Download and set up example data
 
 ```bash
-# navigate to the cloned repository
+# navigate to the cloned repository if you haven't yet
 cd BridGE-Python-AoU
 
 # activate BridGE environment that was installed as described above and run the setup script
@@ -55,20 +55,23 @@ mamba activate bridge3
 # the setup.sh script must be run for every new session when running a BridGE analysis.
 source setup.sh  
 
-# make directories
+# make project directory (example) and subdirectories (raw/preprocess/intermediate/results)
 mkdir -p example/raw
 mkdir -p example/preprocess
 mkdir -p example/intermediate
 mkdir -p example/results
 
-# download example data
-wget https://zenodo.org/record/23769209/files/gwas_subset.hg38.pgen -P example/raw/
-wget https://zenodo.org/record/23769209/files/gwas_subset.hg38.pvar -P example/raw/
-wget https://zenodo.org/record/23769209/files/gwas_subset.hg38.psam -P example/raw/
+# download example data from https://zenodo.org/records/23769209
+wget https://zenodo.org/records/23769209/files/gwas_subset.hg38.pgen -P example/raw/
+wget https://zenodo.org/records/23769209/files/gwas_subset.hg38.pvar -P example/raw/
+wget https://zenodo.org/records/23769209/files/gwas_subset.hg38.psam -P example/raw/
 wget https://zenodo.org/records/23769209/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.pgen -P example/raw/
 wget https://zenodo.org/records/23769209/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.pvar -P example/raw/
 wget https://zenodo.org/records/23769209/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.psam -P example/raw/
 wget https://zenodo.org/records/23769209/files/allpopid.txt -P example/raw/
+
+# copy expanded gene list from refdata to raw directory
+cp refdata/glist-hg38-50000.bed example/raw/
 ```
 
 Preprocess example data
@@ -91,8 +94,20 @@ remove_outlier.sh \
     example/preprocess/gwas_subset.hg38.rmoutlier \
     0.07 0.12 0.10 0.15
 
-# Preprocess the data to remove related samples, match cases to controls, and prune SNPs for LD.
-preprocess.sh example/preprocess/gwas_subset.hg38.rmoutlier example/raw/gwas_final example/raw/glist-hg38-50000.bed
+# basic QC (MAF, missingness, Hardy-Weinberg equilibrium)
+basic_QC.sh example/preprocess/gwas_subset.hg38.rmoutlier example/preprocess/basicQC
+
+# prune SNPs for LD
+prune_LD.sh example/preprocess/basicQC example/preprocess/pruneLD
+
+# remove related samples
+remove_related.sh example/preprocess/pruneLD example/preprocess/removedRelated
+
+# match cases to controls using PCA
+match_CC.sh example/preprocess/removedRelated example/preprocess/gwas_final
+
+# required computations for BridGE
+required.sh example/preprocess/gwas_final example/raw/gwas_final example/raw/glist-hg38-50000.bed
 ```
 
 Run BridGE analysis
@@ -112,9 +127,9 @@ It is recommended that your GWAS data go through some preprocessing steps for qu
 
 These are the preprocessing scripts that we have created to be used on GWAS data before running BridGE.
 
-- check_populations.sh: identify and filter out samples based on ancestry of interest.
-- QC.sh: basic quality control for GWAS data
-- reduce_LD.sh: get a less redundant set of SNPs using LD pruning
+- check_populations.sh, remove_outlier.sh: identify and filter out samples based on ancestry of interest.
+- basic_QC.sh: filter samples and SNPs for MAF, missingness, and Hardy-Weinberg equilibrium
+- prune_LD.sh: get a less redundant set of SNPs using LD pruning
 - remove_related.sh: filter out samples based on a king relatedness threshold
 - match_CC.sh: match cases to controls using PCA
 - required.sh: necessary computations for BridGE, such as running PCA to guide phenotype permutations, removing SNPs outside gene boundaries, and computing an LD matrix for discovering SNP interactions when writing out the result files.

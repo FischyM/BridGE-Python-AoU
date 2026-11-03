@@ -3,6 +3,7 @@ set -e
 set -u
 set -o pipefail
 
+
 # Drop samples that sit outside a rectangle on the top two population axes.
 # Replaces scripts/data_removeoutlier.sh.
 #
@@ -19,6 +20,7 @@ set -o pipefail
 #   x1 x2       inclusive bounds on the first axis (PC1)
 #   y1 y2       inclusive bounds on the second axis (PC2)
 
+
 plinkFile=$1
 coordsFile=$2
 out=$3
@@ -26,6 +28,7 @@ x1=$4
 x2=$5
 y1=$6
 y2=$7
+
 
 python -m remove_outlier_helper \
     --coords "${coordsFile}" \

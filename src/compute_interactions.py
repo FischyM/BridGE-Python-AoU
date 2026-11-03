@@ -1,6 +1,6 @@
 import math, sys
 from datetime import datetime
-from os import path
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -95,13 +95,15 @@ def run_single(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, s
     """Computes the interaction network for a single model (RR, RD, or DD) and saves it to a pickle file.
 
     Args:
-        project_dir (str): _description_
-        model (str): _description_
-        alpha1 (float): _description_
-        alpha2 (float): _description_
-        n_jobs (int): _description_
-        n_workers (int): _description_
-        R (int): _description_
+        project_dir (str): The directory containing the project files and intermediate results.
+        model (str): The model to use for computing interactions (RR, RD, or DD).
+        alpha1 (float): Upper bound p-value cutoff for carriers of both SNPs (p11).
+        alpha2 (float): Lower bound p-value cutoff for the other three possibilities (p01, p10, p00).
+        n_jobs (int): The number of chunks to split the total work into to run for each model.
+        n_workers (int): The number of worker processes to use for parallel processing.
+        R (int): The run number to use (0 is real, anything greater than 0 is random).
+        seed (int): The random seed to use for reproducibility.
+        compressed (bool): Whether to save the output in compressed format.
     """
     t1 = datetime.now()
     print(f'    R={R}, model={model}', end="", flush=True)
@@ -151,11 +153,12 @@ def run_single(project_dir, model, alpha1, alpha2, n_jobs, n_workers, pool, R, s
     if R > 0:
         # single deterministic permutation per R
         rng = np.random.default_rng(seed * R) if seed != 0 else np.random.default_rng(R)
-        cluster_file = f"{project_dir}/raw/plink.cluster.tsv"
-        if not path.exists(cluster_file):
+        cluster_file = Path(f"{project_dir}/raw/bridge.cluster.tsv")
+        if not cluster_file.exists():
             permuted_idx = rng.permutation(population_size)
             pheno = pheno[permuted_idx]
         else:
+            print(f" (using cluster file: {cluster_file.name})", end="", flush=True)
             pheno = run_pheno_perm(rng, cluster_file, pheno, snp_data['iid'])
 
     case_size = int(np.count_nonzero(pheno))
@@ -351,14 +354,15 @@ def run_combined(project_dir, alpha1, alpha2, n_jobs, n_workers, pool, R, seed, 
     """Run the three models (RR, RD, DD) and combine their results into a single InteractionNetwork.
 
     Args:
-        project_dir (str): _description_
-        alpha1 (float): _description_
-        alpha2 (float): _description_
-        n_jobs (int): _description_
-        n_workers (int): _description_
+        project_dir (str): The directory containing the project files and intermediate results.
+        alpha1 (float): Upper bound p-value cutoff for carriers of both SNPs (p11).
+        alpha2 (float): Lower bound p-value cutoff for the other three possibilities (p01, p10, p00).
+        n_jobs (int): The number of chunks to split the total work into to run for each model.
+        n_workers (int): The number of worker processes to use for parallel processing.
         pool (multiprocessing.Pool): The process pool to use for parallel processing.
-        R (int): _description_
-        seed (int): _description_
+        R (int): The run number to use (0 is real, anything greater than 0 is random).
+        seed (int): The random seed to use for reproducibility.
+        compressed (bool): Whether to save the output in compressed format.
     """
     run_single(project_dir, 'RR', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)
     run_single(project_dir, 'RD', alpha1, alpha2, n_jobs, n_workers, pool, R, seed, compressed=compressed)

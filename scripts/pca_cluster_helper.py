@@ -231,8 +231,9 @@ def main():
           f"{sizes.size} clusters, "
           f"size min/median/max = {sizes.min()}/{int(np.median(sizes))}/{sizes.max()}, "
           f"case fraction min/max = {case_frac.min():.2f}/{case_frac.max():.2f}", flush=True)
+    print()
 
-    with open(Path(args.out).with_name(f'plink.cluster.tsv'), "w") as out:
+    with open(Path(args.out).with_name(f'bridge.cluster.tsv'), "w") as out:
         out.write("IID\tPHENO\tCLUSTER\n")
         for key, ph, cl in zip(keys, pheno, labels):
             out.write(f"{key[-1]}\t{ph}\t{cl}\n")

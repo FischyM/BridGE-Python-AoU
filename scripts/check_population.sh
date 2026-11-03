@@ -3,25 +3,11 @@ set -e
 set -u
 set -o pipefail
 
+
 # Compare a study cohort against 1000 Genomes reference populations on the top
 # two population axes, so that samples outside the intended ancestry can be
 # spotted and removed (see example-remove_outlier.sh).
 #
-# Replaces scripts/data_checkpopulation.sh. Three changes are worth knowing:
-#
-#  * The two panels are no longer merged. plink2 (through v2.0.0-a.7) can only
-#    concatenate filesets that share their samples; a sample-wise merge exits
-#    with "Non-concatenating --pmerge[-list] is under development". Instead the
-#    axes are defined by a PCA of the reference panel alone and both cohorts
-#    are projected onto them with --score, which is also the better-behaved
-#    option: study samples can no longer rotate the reference axes.
-#  * Those axes come from --pca rather than plink 1.9 --genome + --cluster
-#    --mds-plot. --genome builds an all-pairs IBD matrix, which is O(samples^2)
-#    and was the slowest step by far. Coordinates are therefore PCs, not MDS
-#    dimensions, and are on a different scale: read new cutoffs off the plot.
-#  * Allele conflicts between the panels are resolved up front by comparing the
-#    two .pvar files, rather than by attempting a merge, reading plink 1.9's
-#    .missnp output and re-merging in a loop.
 #
 # Usage:
 #   ./check_population.sh <studyPfile> <refPfile> <popIDFile> <outPrefix> [pops]
