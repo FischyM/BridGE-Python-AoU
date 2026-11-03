@@ -8,18 +8,18 @@ plink_file=$1       # base name of the PLINK file (without extension)
 output_file=$2      # base name of the output file (without extension)
 gene_list=$3        # path to the gene list file (in BED format) to filter SNPs by gene boundaries
 
-npcs=10             # number of PCs to compute for PCA and to use in matching cases to controls
+npcs=$4             # number of PCs to compute for PCA and to use in matching cases to controls
 
 
 # recalculate PCA on matched dataset to use in permutation testing
 plink2 --pfile "${plink_file}" \
-    --pca ${npcs} \
+    --pca "${npcs}" \
     --out "${plink_file}.pca" --silent
 
 python -m pca_cluster_helper \
     --pcaPrefix "${plink_file}.pca" \
     --psam "${plink_file}.psam" \
-    --npcs ${npcs} \
+    --npcs "${npcs}" \
     --out "${output_file}.cluster"
 
 

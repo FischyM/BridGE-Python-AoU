@@ -70,11 +70,12 @@ wget https://zenodo.org/records/23769209/files/ALL.shapeit2_integrated_v1a.GRCh3
 wget https://zenodo.org/records/23769209/files/ALL.shapeit2_integrated_v1a.GRCh38.20181129.phased.rsid.psam -P example/raw/
 wget https://zenodo.org/records/23769209/files/allpopid.txt -P example/raw/
 
-# copy expanded gene list from refdata to raw directory
+# copy reference data to raw directory (expanded gene list and pathway/gene-set lists)
 cp refdata/glist-hg38-50000.bed example/raw/
+cp refdata/c2.cp.v2026.1.Hs.* example/raw/
 ```
 
-Preprocess example data
+Preprocess example data. By default, most files created in the 'preprocessing' directory are not deleted so that you can go back and inspect them if needed. If space is an issue, all needed files were saved to the 'raw' directory, so everything in 'preprocessing' can be deleted if needed.
 
 ```bash
 # check the study population against 1000 Genomes reference populations.
@@ -94,31 +95,47 @@ remove_outlier.sh \
     example/preprocess/gwas_subset.hg38.rmoutlier \
     0.07 0.12 0.10 0.15
 
-# basic QC (MAF, missingness, Hardy-Weinberg equilibrium)
-basic_QC.sh example/preprocess/gwas_subset.hg38.rmoutlier example/preprocess/basicQC
+# basic QC 
+# args: input file name, output file name, sample missing rate (mind), genotype missing rate (geno),
+# HWE p-value (hwe_p), HWE p-value adjustment factor (hwe_k), minimum allele frequency (maf)
+basic_QC.sh example/preprocess/gwas_subset.hg38.rmoutlier example/preprocess/basicQC 0.05 0.01 0.000001 0.001 0.01
 
 # prune SNPs for LD
-prune_LD.sh example/preprocess/basicQC example/preprocess/pruneLD
+# args: input file name, output file name, ld window size, ld step size, max squared correlation coefficient 
+prune_LD.sh example/preprocess/basicQC example/preprocess/pruneLD 50 5 0.1
 
 # remove related samples
-remove_related.sh example/preprocess/pruneLD example/preprocess/removedRelated
+# args: input file name, output file name, king relatedness cutoff
+remove_related.sh example/preprocess/pruneLD example/preprocess/removedRelated 0.125
 
 # match cases to controls using PCA
-match_CC.sh example/preprocess/removedRelated example/preprocess/gwas_final
+# args: input file name, output file name, number of PCs to use in matching, number of controls to match to a case
+match_CC.sh example/preprocess/removedRelated example/preprocess/gwas_final 10 1
 
-# required computations for BridGE
+# required files for BridGE (sample permutations within PCA-based clusters, removing SNPs outside of genes, and computing LD between SNPs for writing results)
+# args: input file name, output file name, gene list file (with expanded boundaries in BED format), number of PCs to use in clustering
 required.sh example/preprocess/gwas_final example/raw/gwas_final example/raw/glist-hg38-50000.bed
 ```
 
-Run BridGE analysis
+Run BridGE analysis. Above each step is commented the expected runtime and ComputeInteraction/ComputeStats also has the expected maximum memory usage.
 
 ```bash
+# DataProcess will result in 314 samples, 31779 SNPs, 949 pathways
+# ~30 sec
 python bridge.py --projectDir=example --module=DataProcess --plinkFile=gwas_final --geneAnnotation=glist-hg38-50000.bed --geneSets=c2.cp.v2026.1.Hs --simMeasure=either --jaccardCutoff=0.5 --overlapCutoff=0.5 --nWorker=30
-python bridge.py --projectDir=example --module=ComputeInteraction --model=combined --nWorker=30 --nJobs=4 --seed=42 --R=10
-python bridge.py --projectDir=example --module=ComputeStats --model=combined --nWorker=30 --nJobs=1 --snpPerms=10000 --seed=42 --R=10
-python bridge.py --projectDir=example --module=ComputeFDR --model=combined --pvalueCutoff=0.05 --R=10
+
+# ~3 hr 47 min (~20 min per network), 53 GB
+python bridge.py --projectDir=example --module=ComputeInteraction --model=combined --seed=42 --R=10 --nWorker=30 --nJobs=4
+
+# ~25 min (~2.5 min per network), 8 GB
+python bridge.py --projectDir=example --module=ComputeStats --model=combined --seed=42 --R=10 --snpPerms=10000 --nWorker=30 --nJobs=1
+
+# ~16 sec: 
+python bridge.py --projectDir=example --module=ComputeFDR --model=combined --R=10 --pvalueCutoff=0.05
+
+# ~1 min: 
 python bridge.py --projectDir=example --module=Summarize --model=combined --fdrCutoff=0.25
-# 314 samples, 45610 SNPs, 949 pathways
+
 ```
 
 ## Preprocessing GWAS data
@@ -237,7 +254,7 @@ For example, a 'combined' model on random network '10' will be 'snp_interaction_
 
 ### Computing Pathway-level Statistics (ComputeStats)
 
-This module computes per-pathway statistics for a protective and risk model assumptions. This model is limited to bandwidth, so using more nWorkers or more nJobs will not scale linearly. See section 'Tips and Tricks' for more details on this. This module uses SNP permutations for real and random networks to generate an empirical distribution for assessing the pathway signficance. These permutations are controlled using the '--seed' arg. As the random SNP interactions networks have already been permuted, the randomness for this model will be deterministic to the SNP permutation number, meaning if this module is ran with 1,000 or 10,000 permutation, the first 1,000 SNP permutations will be the same between both runs.
+This module computes per-pathway statistics for a protective and risk model assumptions. This model is limited to bandwidth when using many pathways (more than 2000), so using more nWorkers or more nJobs will not scale linearly. See section 'Tips and Tricks' for more details on this. This module uses SNP permutations for real and random networks to generate an empirical distribution for assessing the pathway signficance. These permutations are controlled using the '--seed' arg. As the random SNP interactions networks have already been permuted, the randomness for this model will be deterministic to the SNP permutation number, meaning if this module is ran with 1,000 or 10,000 permutation, the first 1,000 SNP permutations will be the same between both runs.
 
 Input:
 
@@ -315,7 +332,7 @@ All files are saved to the 'results' directory. The following files can be creat
 
 ### Choosing approrpiate nJobs and nWorkers
 
-Users should empirically identify proper settings for 'nWorker' and 'nJobs' by running a single network and seeing how long it takes and how much memory is used. This can be done using the '--i' parameter instead of '--R'. Generally, the more cpus/cores/nWorkers, the faster the computations will run. However, this could use too much RAM than what is available by the system. Therefore, BridGE by default will print how much memory BridGE used for either ComputeInteraction or ComputeStats. It is highly recommended to do this for ComputeStats, as the benefit of more nWorkers is not linear and appears to be capped by memory bandwidth, meaning larger nJobs and larger nWorkers won't necessarily lead to better run times. A good rule of thumb is to test 3 different nWorkers (ie. 10, 20, 30) and 3 different nJobs (ie. 5, 10, 20) and see which of the 9 combinations are most effective for your data and your system.
+Users should empirically identify proper settings for 'nWorker' and 'nJobs' by running a single network and seeing how long it takes and how much memory is used. This can be done using the '--i' parameter instead of '--R'. Generally, the more cpus/cores/nWorkers, the faster the computations will run. However, this could use too much RAM than what is available by the system. Therefore, BridGE by default will print how much memory BridGE used for either ComputeInteraction or ComputeStats. It is highly recommended to do this for ComputeStats if you are using more than 2000 pathways, as the benefit of more nWorkers is not linear and appears to be capped by memory bandwidth. A good rule of thumb is to test 3 different nWorkers (ie. 10, 20, 30) and 3 different nJobs (ie. 5, 10, 20) and see which of the 9 combinations are most effective for your data and your system.
 
 ### Not rerunning ComputeInteractions
 
