@@ -155,10 +155,10 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
     pheno = snp_data['pheno']
 
     # load ld_file
-    ld_sparse_csr = load_npz(f"{project_dir}/raw/plink.ld.r2.npz").tocsr()
-    ld_vars = pl.read_csv(f"{project_dir}/raw/plink.ld.r2.vars", has_header=False, new_columns=['varid'],
+    ld_sparse_csr = load_npz(f"{project_dir}/raw/bridge.ld.r2.npz").tocsr()
+    ld_vars = pl.read_csv(f"{project_dir}/raw/bridge.ld.r2.vars", has_header=False, new_columns=['varid'],
                           schema_overrides={'varid': pl.String})
-    assert np.array_equal(ld_vars['varid'].to_numpy().astype(str), varid.astype(str))
+    assert np.array_equal(ld_vars['varid'].to_numpy().astype(str), varid.astype(str)), f"LD variables do not match SNP data."
 
     # genotype coding, applied per selected column rather than to all of G
     dom_map = np.array([0, 1, 1], dtype=np.int8)  # dominant:  0->0, 1->1, 2->1

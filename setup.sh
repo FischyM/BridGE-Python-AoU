@@ -19,7 +19,7 @@ alias plink2='${CURRENTDIR}/scripts/plink2'
 if [ -z "$CONDA_PREFIX" ]
 then 
     echo "No conda environment activated. Activating that for you if it exists."
-    source activate bridge-aou
+    source activate bridge3
 else 
     echo "Conda environment is already activated: $CONDA_PREFIX"
 fi

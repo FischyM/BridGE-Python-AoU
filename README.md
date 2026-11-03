@@ -348,7 +348,7 @@ Due to the nature of BridGE using many random networks to derive empirical p-val
 
 ## SLURM Scheduler
 
-We have provided files that you can modify in the slurm_scripts directory to run BridGE. We have found that for HPC systems it can be easier to run the heavy computational parts (ComputeInteractions, ComputeStats) within a single sbatch command using arrays, as demonstrated in slurm_scripts/computations.sh. The results also can run quite fast, so combining ComputeFDR and Summarize together is easy to do as well, as shown in slurm_scripts/results.sh. For preprocessing the GWAS data and the DataProcess module, we find it easier to run this locally first until you are satisfied, then run the heavy computational load on an HPC system.
+We have provided files that you can modify in the slurm_scripts directory to run BridGE. We have found that for HPC systems it can be easier to run the heavy computational parts (ComputeInteractions, ComputeStats) within a single sbatch command using arrays, as demonstrated in slurm_scripts/computations.sh. The results also can run quite fast, so combining ComputeFDR and Summarize together is easy to do as well, as shown in slurm_scripts/results.sh. For preprocessing the GWAS data and the DataProcess module, we find it easier to run this locally first until you are satisfied, then run the heavy computational load on an HPC system. See slurm_scripts/SLURM.md for more information.
 
 ## How to cite
 
