@@ -26,11 +26,11 @@ for i in "$@"; do
             pval="${i#*=}"
             shift
             ;;
-        --nSample=*)
+        --R=*)
             n="${i#*=}"
             shift
             ;;
-        --id=*)
+        --i=*)
             net_id="${i#*=}"
             shift
             ;;
@@ -75,7 +75,6 @@ fi
 # ComputeFDR and Summarize take the -R0 file and find the pathway stats of R1..R<n> from it.
 raw_dir="$(dirname "${infile}")"
 intermediate_dir="$(dirname "${raw_dir}")/intermediate"
-mkdir -p "${intermediate_dir}"
 
 
 # Deciding on the command based on interaction type
@@ -113,27 +112,27 @@ esac
 
 
 # CASSI text output for network i, and the converted network
-cassi_txt() { echo "${raw_dir}/${model}-R$1.txt"; }
+cassi_txt() { echo "${intermediate_dir}/${model}-R$1.txt"; }
 network_npz() { echo "${intermediate_dir}/snp_interaction_networks-${model}-R$1.npz"; }
 
 
 if [ -z "$seed" ]; then
-    seed=6377474
+    seed=42
 fi
 
 if [ -z "$net_id" ]; then 
     # Step 1, compute SNP-SNP interaction using CASSI
-    cassi -i "${infile}.bed"  "${th_command}" "${pval}" -max 0 -o "$(cassi_txt 0)"
+    cassi -i "${infile}.bed" "${th_command}" "${pval}" -max 0 -o "$(cassi_txt 0)"
     # Step 2, convert SNP-SNP interaction to BridGE's sparse network format
     python3 -m cassi_ssm "${infile}.bim" "$(cassi_txt 0)" "${gi}" "$(network_npz 0)"
     for i in $(seq 1 "$n");
     do
         tmp_seed=$($seed + "$i")
-        plink --bfile "${infile}" --seed "$tmp_seed" --make-perm-pheno 1 --out "${raw_dir}/rand_pheno${i}"
-        plink --bfile "${infile}" --pheno "${raw_dir}/rand_pheno${i}.pphe" --mpheno 1 --make-bed --out "${infile}_R${i}"
-        cassi -i "${infile}_R${i}.bed" "${th_command}" "${pval}"  -max 0 -o "$(cassi_txt "$i")"
+        plink --bfile "${infile}" --seed "$tmp_seed" --make-perm-pheno 1 --out "${intermediate_dir}/rand_pheno${i}"
+        plink --bfile "${infile}" --pheno "${intermediate_dir}/rand_pheno${i}.pphe" --mpheno 1 --make-bed --out "${infile}_R${i}"
+        cassi -i "${infile}_R${i}.bed" "${th_command}" "${pval}" -max 0 -o "$(cassi_txt "$i")"
         python3 -m cassi_ssm "${infile}.bim" "$(cassi_txt "$i")" "${gi}" "$(network_npz "$i")"
-        rm "${raw_dir}/rand_pheno${i}.pphe"
+        rm "${intermediate_dir}/rand_pheno${i}.pphe"
     done
 else
     # find which network is being created
@@ -142,10 +141,10 @@ else
         python3 -m cassi_ssm "${infile}.bim" "$(cassi_txt 0)" "${gi}" "$(network_npz 0)"
     else
         tmp_seed=$($seed + "$net_id")
-        plink --bfile "${infile}" --seed "$tmp_seed" --make-perm-pheno 1 --out "${raw_dir}/rand_pheno${net_id}"
-        plink --bfile "${infile}" --pheno "${raw_dir}/rand_pheno${net_id}.pphe" --mpheno 1 --make-bed --out "${infile}_R${net_id}"
+        plink --bfile "${infile}" --seed "$tmp_seed" --make-perm-pheno 1 --out "${intermediate_dir}/rand_pheno${net_id}"
+        plink --bfile "${infile}" --pheno "${intermediate_dir}/rand_pheno${net_id}.pphe" --mpheno 1 --make-bed --out "${infile}_R${net_id}"
         cassi -i "${infile}_R${net_id}.bed" "${th_command}" "${pval}"  -max 0 -o "$(cassi_txt "$net_id")"
         python3 -m cassi_ssm "${infile}.bim" "$(cassi_txt "$net_id")" "${gi}" "$(network_npz "$net_id")"
-        rm "${raw_dir}/rand_pheno${net_id}.pphe"
+        rm "${intermediate_dir}/rand_pheno${net_id}.pphe"
     fi
 fi
