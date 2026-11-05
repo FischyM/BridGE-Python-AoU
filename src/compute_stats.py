@@ -1099,6 +1099,20 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
     (np.savez_compressed if compressed else np.savez)(output_file, allow_pickle=False, **out)
 
 def run_stats(project_dir, snp_int_file, binary_flag, net_density, snp_perms, n_jobs, n_workers, seed, compressed=False):
+    """This function will compute the pathway statistics for the given SNP interaction network.
+
+    Args:
+        project_dir (str): Path to the project directory
+        snp_int_file (str): Path to the SNP interaction file
+        binary_flag (bool): Whether to binarize the networks
+        net_density (float): Density of the interaction networks
+        snp_perms (int): Number of SNP permutations
+        n_jobs (int): Number of jobs to run in parallel
+
+        n_workers (int): Number of worker processes
+        seed (int): Random seed for reproducibility
+        compressed (bool, optional): Whether to save files compressed. Defaults to False.
+    """
     
     # load pathway indices
     bpm = pl.read_parquet(f"{project_dir}/intermediate/pathway_indices-bpm.parquet")
