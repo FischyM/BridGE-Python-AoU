@@ -76,7 +76,7 @@ def binarize(mm, threshold):
     threshold is. This is deliberately NOT the dense `mm[mm>=threshold] = 1` for a threshold
     of 0 or less: that expression would promote the zeros too and densify to an all-ones
     (s x s) matrix. For a positive threshold the two agree exactly, which is the case that
-    matters for the 0.2 score cutoff and for the netDensity quantile cutoffs.
+    matters for the edge_cutoff thresholds.
 
     Explicitly stored zeros are removed first, so `threshold=0` means "keep every nonzero
     entry" regardless of whether the caller has already canonicalized the matrix.
@@ -104,6 +104,45 @@ def sparse_quantile(mm, q):
     hi = int(math.ceil(pos))
     v_lo = value_at(lo)
     return v_lo + (pos - lo) * (value_at(hi) - v_lo)
+
+def edge_cutoff(network, density_cutoff, name='network'):
+    """Score threshold that defines an interaction edge: a pair is an edge if its score is >= it.
+
+    Shared by ComputeStats (binarizing the network) and Summarize (interaction lists and
+    driver SNPs) so both use the same edges. It is a density, not a score, so it means the
+    same for BridGE scores (-log10 p-value ratios) and CASSI scores (-log10 p-values).
+
+    Args:
+        network (csr_array): SNP-SNP interaction scores, every stored value > 0
+        density_cutoff (float or None): None keeps every stored (nonzero) score, i.e. every
+            interaction that passed the upstream filter (alpha1/alpha2 for BridGE, --pvalue
+            for CASSI). Otherwise the fraction of ALL SNP pairs to keep, 0 < density_cutoff < 1:
+            the threshold is the (1 - density_cutoff) quantile of the dense network.
+        name (str): network name for messages
+
+    Returns:
+        float: the threshold, always > 0 so structural zeros are never edges. If density_cutoff
+            is at or above the network's density the quantile is 0, so every stored score is
+            kept (with a warning).
+    """
+    keep_all = np.finfo(np.float64).tiny
+    density = network.nnz / (int(network.shape[0]) * int(network.shape[1]))
+    if density_cutoff is None:
+        print(f"    {name}: keeping all {network.nnz:,} stored interactions as edges "
+              f"(density {density:.4f})", flush=True)
+        return keep_all
+    if not 0 < density_cutoff < 1:
+        raise ValueError(f"densityCutoff must be between 0 and 1, got {density_cutoff}")
+    cutoff = sparse_quantile(network, 1 - density_cutoff)
+    if cutoff <= 0:
+        print(f"    warning: {name}: densityCutoff={density_cutoff} is at or above the network's "
+              f"density ({density:.4f}); keeping all {network.nnz:,} stored interactions", flush=True)
+        return keep_all
+    kept = int(np.count_nonzero(network.data >= cutoff))
+    print(f"    {name}: densityCutoff={density_cutoff} keeps scores >= {cutoff:.4g} "
+          f"({kept:,} of {network.nnz:,} stored interactions)", flush=True)
+    return cutoff
+
 
 def indicator_matrix(index_lists, s):
     """(s x len(index_lists)) 0-1 csr_array; column j marks the SNPs in index_lists[j]."""
@@ -611,7 +650,8 @@ def bpm_pathway_ids(bpm, wpm):
     return idx1.astype(np.int64), idx2.astype(np.int64)
 
 
-def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, output_file, compressed=False):
+def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, output_file, compressed=False,
+                  edge_threshold=None):
     """Compute BPM/WPM/PATH statistics for one network with SNP permutations.
 
     Args:
@@ -625,6 +665,8 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
         seed (int): number for random number generator seed for SNP permutation stage
         output_file (str): output file path to save the computed statistics
         compressed (bool, optional): flag to compress the output. Defaults to False.
+        edge_threshold (float, optional): score threshold from edge_cutoff that defines the
+            edges for the chi2 stage of a non-binary network. Defaults to every stored score.
     """
 
     n_jobs = max(int(n_jobs), 1)
@@ -662,10 +704,11 @@ def pathway_stats(input_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_wor
         # if true, then the network was already binarized with present or not present
         mm = mm_scores
     else:
-        # else, binarize with a 0.2 cutoff, but since this is -log10(pvalues) then it is equivalent to a pvalue of 0.63
-        # since 0.1 pvalue threshold is used with chi2 marginal significance, maybe that should be used here too?
-        # -1.0 * log10(0.1) = 1.0, so maybe use this instead?
-        mm = binarize(mm_scores, 0.2)
+        # else, binarize at the edge threshold for the chi2 stage; the ranksum stage below
+        # uses the scores themselves
+        if edge_threshold is None:
+            edge_threshold = np.finfo(np.float64).tiny
+        mm = binarize(mm_scores, edge_threshold)
 
     sumMM = np.asarray(mm.sum(axis=1)).ravel()
 
@@ -1076,33 +1119,23 @@ def run_stats(project_dir, snp_int_file, binary_flag, net_density, snp_perms, n_
     r_density = r_network.nnz / (r_network.shape[0] * r_network.shape[1]) * 100
     print(f"    {r_density:.2f}% of the entries are nonzero in risk network", flush=True)
 
+    # edges: every stored interaction, or the top net_density fraction of SNP pairs
+    p_cutoff = edge_cutoff(p_network, net_density, 'protective')
+    r_cutoff = edge_cutoff(r_network, net_density, 'risk')
     if binary_flag:
-        if net_density is None:
-            # every stored value is > 0, so this is just "set the stored values to 1"
-            p_network = binarize(p_network, 0)
-            r_network = binarize(r_network, 0)
-        else:
-            p_cutoff = sparse_quantile(p_network, 1 - net_density)
-            r_cutoff = sparse_quantile(r_network, 1 - net_density)
-            # A cutoff of 0 or less would binarize the zeros too, i.e. densify to an all-ones
-            # s x s matrix. That is unrepresentable sparsely (and almost certainly not
-            # intended), so fall back to keeping the stored entries and say so.
-            tiny = np.finfo(np.float64).tiny
-            for name, cutoff in (('protective', p_cutoff), ('risk', r_cutoff)):
-                if cutoff <= 0:
-                    print(f"    warning: net_density={net_density} puts the {name} cutoff at "
-                          f"{cutoff}; keeping all nonzero entries instead of densifying", flush=True)
-            p_network = binarize(p_network, max(p_cutoff, tiny))
-            r_network = binarize(r_network, max(r_cutoff, tiny))
+        p_network = binarize(p_network, p_cutoff)
+        r_network = binarize(r_network, r_cutoff)
 
     print(f"  running genstats on protective network", flush=True)
     new_prot_name = f"pathway_stats-prot-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
     prot_output_file = snp_int_file.with_name(new_prot_name)
-    pathway_stats(p_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, prot_output_file, compressed=compressed)
+    pathway_stats(p_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, prot_output_file, compressed=compressed,
+                  edge_threshold=p_cutoff)
 
     print(f"  running genstats on risk network", flush=True)
     new_risk_name = f"pathway_stats-risk-{'-'.join(snp_int_file.stem.split('-')[-2:])}.npz"
     risk_output_file = snp_int_file.with_name(new_risk_name)
-    pathway_stats(r_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, risk_output_file, compressed=compressed)
+    pathway_stats(r_network, bpm, wpm, binary_flag, snp_perms, n_jobs, n_workers, seed, risk_output_file, compressed=compressed,
+                  edge_threshold=r_cutoff)
 
     print(flush=True)

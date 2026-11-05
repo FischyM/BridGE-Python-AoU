@@ -12,7 +12,7 @@ from src import collect_results as cr
 
 MODULE_CHOICES = ('DataProcess', 'ComputeInteraction', 'ComputeStats', 'ComputeFDR', 'Summarize')
 GENOTYPE_MODELS = ('RR', 'RD', 'DD', 'combined')
-# networks imported from CASSI, made by scripts/cassi-run.sh as snp_interaction_networks-cassi_<GI>-R<i>.npz
+# networks imported from CASSI, made by cassi_run.py as snp_interaction_networks-cassi_<GI>-R<i>.npz
 CASSI_MODELS = ('cassi_LR', 'cassi_LIN', 'cassi_JE', 'cassi_AWU', 'cassi_AFE', 'cassi_WZ')
 VALID_MODELS = GENOTYPE_MODELS + CASSI_MODELS
 # SIM_MEASURES = ('jaccard', 'overlap', 'either', 'none')
@@ -32,7 +32,6 @@ def parse_args():
     p.add_argument('--R', dest='r', type=int, default=-1)
     p.add_argument('--densityCutoff', dest='density_cutoff', type=float, default=None)
     p.add_argument('--seed', dest='seed', type=int, default=42)
-    p.add_argument('--ssmFile', dest='ssm_file', default=None)
     p.add_argument('--noMem', dest='no_mem', action='store_true')
     p.add_argument('--compressed', dest='compressed', action='store_true')
     
@@ -105,7 +104,7 @@ def run_data_process(args):
 
 def run_compute_interaction(args):
     if args.model in CASSI_MODELS:
-        sys.exit(f"{args.model} networks are computed by scripts/cassi-run.sh, not ComputeInteraction")
+        sys.exit(f"{args.model} networks are computed by cassi_run.py, not ComputeInteraction")
     print("Computing SNP-SNP Interactions")
 
     # setup memory tracking
@@ -174,19 +173,12 @@ def run_compute_stats(args):
     monitor_thread = threading.Thread(target=monitor)
     monitor_thread.start()
         
-    if args.ssm_file is not None:
-        snp_int_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
-        print(f'Computing statistics on {args.ssm_file}')
-        cs.run_stats(args.project_dir, snp_int_file, args.binary_network, args.density_cutoff, 
+    indices = range(args.r + 1) if args.r >= 0 else [args.i]
+    for i in indices:
+        snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R{i}.npz"
+        print(f'Computing statistics on {args.model}-R{i}')
+        cs.run_stats(args.project_dir, snp_int_file, args.binary_network, args.density_cutoff,
                     args.snp_perms, args.n_jobs, args.n_workers, args.seed, compressed=args.compressed)
-
-    else:
-        indices = range(args.r + 1) if args.r >= 0 else [args.i]
-        for i in indices:
-            snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R{i}.npz"
-            print(f'Computing statistics on {args.model}_R{i}')
-            cs.run_stats(args.project_dir, snp_int_file, args.binary_network, args.density_cutoff,
-                        args.snp_perms, args.n_jobs, args.n_workers, args.seed, compressed=args.compressed)
             
     stop_event.set()
     monitor_thread.join()
@@ -196,23 +188,16 @@ def run_compute_stats(args):
         
         
 def run_compute_fdr(args):
-    if args.ssm_file is None:
-        snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R0.npz"
-    else:
-        snp_int_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
-
     print(f'Computing FDR')
+    snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R0.npz"
     fdr.run_fdr(snp_int_file, args.pval_cutoff, args.r, compressed=args.compressed)
 
 
 def run_summarize(args):
     # a network not computed from the genotypes here has no genotype-derived columns to report
-    imported = args.ssm_file is not None or args.model in CASSI_MODELS
-    if args.ssm_file is None:
-        snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R0.npz"
-    else:
-        snp_int_file = f"{args.project_dir}/intermediate/{args.ssm_file}"
-    
+    imported = args.model in CASSI_MODELS
+    snp_int_file = f"{args.project_dir}/intermediate/snp_interaction_networks-{args.model}-R0.npz"
+
     print(f'Summarizing results')
     cr.run_results(args.project_dir, snp_int_file, args.model, args.fdr_cutoff, imported, args.density_cutoff)
 

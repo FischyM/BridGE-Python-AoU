@@ -3,6 +3,7 @@ import polars as pl
 from scipy.sparse import csr_array, load_npz
 from scipy.stats import hypergeom
 
+from src.compute_stats import edge_cutoff
 from src.polars_io import list_column, to_workbook
 
 
@@ -129,8 +130,9 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
         fdrcutoff (float): FDR threshold, used only to name the output file.
         imported_ssm (bool): True when the network was imported rather than
             computed from genotypes; drops the genotype-derived columns.
-        densitycutoff (float, optional): Quantile used to pick the interaction
-            score cutoff. Defaults to a fixed cutoff of 0.2.
+        densitycutoff (float, optional): Fraction of all SNP pairs to keep as edges, the
+            same as ComputeStats' --densityCutoff (see compute_stats.edge_cutoff). Defaults to
+            every stored interaction.
 
     Returns:
         list: [bpm_path1_drivers, bpm_path2_drivers, wpm_path_drivers], each a
@@ -164,15 +166,9 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
     dom_map = np.array([0, 1, 1], dtype=np.int8)  # dominant:  0->0, 1->1, 2->1
     rec_map = np.array([0, 0, 1], dtype=np.int8)  # recessive: 0->0, 1->0, 2->1
 
-    # find score cutoffs if densitycutoff provided
-    if densitycutoff is None:
-        pos_cutoff = 0.2
-        neg_cutoff = 0.2
-    else:
-        if densitycutoff <= 0 or densitycutoff >= 1:
-            densitycutoff = 0.1
-        pos_cutoff = np.quantile(int_network['protective'].toarray(), 1 - densitycutoff)
-        neg_cutoff = np.quantile(int_network['risk'].toarray(), 1 - densitycutoff)
+    # edges are scores >= the cutoff, chosen exactly as ComputeStats chooses them
+    pos_cutoff = edge_cutoff(int_network['protective'], densitycutoff, 'protective')
+    neg_cutoff = edge_cutoff(int_network['risk'], densitycutoff, 'risk')
 
     names1 = np.asarray(path1)
     names2 = np.asarray(path2)
@@ -270,7 +266,7 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
         # For a WPM both sides are the same pathway, so only one triangle counts.
         tmp_dis = np.tril(ssm_dis) if is_wpm else ssm_dis
 
-        bin_int_index = np.argwhere(tmp_dis > score_cutoff)
+        bin_int_index = np.argwhere(tmp_dis >= score_cutoff)
         i = bin_int_index[:, 0]
         j = bin_int_index[:, 1]
         a = ind1[i]  # genome-wide column of each pair's first SNP
@@ -336,7 +332,8 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
         pos2 = [str(p) for p in pos[b]]
         ld = np.full(interaction_pairs, 'NA', dtype=object)
         same = np.flatnonzero(chr1 == chr2)
-        if not imported_ssm and same.size > 0:
+        # LD comes from the genotypes, not the network, so imported networks get it too
+        if same.size > 0:
             r2 = np.asarray(ld_sparse_csr[a[same], b[same]]).ravel()
             ld[same] = [_format_ld(x) for x in r2]
 
@@ -370,9 +367,9 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
             'LD': ld[order]})
 
         # --- driver SNPs -----------------------------------------------------
-        hits = ssm_dis > score_cutoff
+        hits = ssm_dis >= score_cutoff
         in_int1 = np.sum(hits, axis=1)
-        all_int1 = np.asarray((ssm[ind1] > score_cutoff).sum(axis=1)).ravel()
+        all_int1 = np.asarray((ssm[ind1] >= score_cutoff).sum(axis=1)).ravel()
         path1_drivers = _driver_string(
             snps=ind1_snp, genes=ind1_gene,
             snp_mean_gi=in_int1 / ind2.shape[0],
@@ -389,10 +386,10 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
             path2_drivers = _driver_string(
                 snps=ind2_snp, genes=ind2_gene,
                 snp_mean_gi=in_int2 / ind1.shape[0],
-                snp_mean_gi_bg=np.asarray((ssm[ind2] > score_cutoff).sum(axis=1)).ravel() / ssm.shape[0],
+                snp_mean_gi_bg=np.asarray((ssm[ind2] >= score_cutoff).sum(axis=1)).ravel() / ssm.shape[0],
                 n_bg=ssm.shape[1], n_other=ind1.shape[0],
                 in_int=in_int2,
-                all_int=np.asarray((ssm[:, ind2] > score_cutoff).sum(axis=0)).ravel())
+                all_int=np.asarray((ssm[:, ind2] >= score_cutoff).sum(axis=0)).ravel())
 
             bpm_path1_drivers.append(path1_drivers)
             bpm_path2_drivers.append(path2_drivers)
@@ -416,9 +413,12 @@ def get_interaction_pair(project_dir, snp_int_file, model, n, path1, path2, effe
     list_file = f'{project_dir}/results/interaction_list-{kind}-{model}-{fdrcutoff:.2f}.xlsx'
 
     wb = to_workbook({'Sheet1': interaction_table})
-    for col in wb['Sheet1'].iter_cols(min_col=12, max_col=16, min_row=2):  # L:P, skip header
-        for cell in col:
-            cell.number_format = '0.000'
+    # 3 decimals for the numeric columns, located by name since imported networks drop some
+    for name in ('case frequency', 'control frequency', 'GI', 'OR'):
+        if name in interaction_table.columns:
+            c = interaction_table.columns.index(name) + 1
+            for (cell,) in wb['Sheet1'].iter_rows(min_row=2, min_col=c, max_col=c):  # skip header
+                cell.number_format = '0.000'
     wb.save(list_file)
 
     return [bpm_path1_drivers, bpm_path2_drivers, wpm_path_drivers]
